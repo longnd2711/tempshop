@@ -213,7 +213,7 @@ export function CartDrawer({
                   <p>
                     Thanh toán:{' '}
                     <span className="text-slate-900">
-                      Chuyển khoản hoặc thanh toán tiền mặt
+                      Chuyển khoản hoặc thanh toán khi nhận hàng
                     </span>
                   </p>
                   {confirmedOrder.note && (

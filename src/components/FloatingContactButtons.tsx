@@ -8,8 +8,8 @@ export function FloatingContactButtons({
   return (
     <div
       aria-label="Liên hệ nhanh qua Zalo và Facebook"
-      className={`fixed right-4 z-30 flex items-center gap-2.5 transition-all ${
-        hasMobileCartBar ? 'bottom-[72px] md:bottom-5' : 'bottom-4 md:bottom-5'
+      className={`fixed right-3 sm:right-4 z-30 flex items-center gap-2 sm:gap-2.5 transition-all ${
+        hasMobileCartBar ? 'bottom-[70px] md:bottom-5' : 'bottom-4 md:bottom-5'
       }`}
     >
       <a
@@ -18,11 +18,11 @@ export function FloatingContactButtons({
         rel="noopener noreferrer"
         aria-label="Liên hệ Zalo 0916319452"
         title="Nhắn Zalo 0916319452"
-        className="w-12 h-12 rounded-full bg-[#0068FF] hover:bg-[#0055D4] text-white shadow-lg flex items-center justify-center transition-transform duration-150 hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0068FF]"
+        className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[#0068FF] hover:bg-[#0055D4] text-white shadow-lg flex items-center justify-center transition-transform duration-150 hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0068FF]"
       >
         <svg
           viewBox="0 0 48 48"
-          className="w-7 h-7"
+          className="w-6 h-6 sm:w-7 sm:h-7"
           fill="none"
           aria-hidden="true"
         >
@@ -50,11 +50,11 @@ export function FloatingContactButtons({
         rel="noopener noreferrer"
         aria-label="Nhắn tin Facebook Messenger thuhuong.nguyen.180"
         title="Nhắn Facebook thuhuong.nguyen.180"
-        className="w-12 h-12 rounded-full bg-[#1877F2] hover:bg-[#1465D0] text-white shadow-lg flex items-center justify-center transition-transform duration-150 hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1877F2]"
+        className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[#1877F2] hover:bg-[#1465D0] text-white shadow-lg flex items-center justify-center transition-transform duration-150 hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1877F2]"
       >
         <svg
           viewBox="0 0 24 24"
-          className="w-6 h-6"
+          className="w-5 h-5 sm:w-6 sm:h-6"
           fill="currentColor"
           aria-hidden="true"
         >

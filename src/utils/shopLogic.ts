@@ -21,9 +21,55 @@ export function normalizeVietnameseText(input: string): string {
     .trim();
 }
 
+export function normalizeCategoryKey(input: string): string {
+  return normalizeVietnameseText(input)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function formatVnd(amount: number): string {
   const rounded = Math.round(amount);
   return `${rounded.toLocaleString('vi-VN')}₫`;
+}
+
+export function extractCategories(products: Product[]): string[] {
+  const seen = new Set<string>();
+  const categories: string[] = [];
+
+  for (const product of products) {
+    const raw = (product.category || product.categoryLabel || '').trim();
+    if (!raw) continue;
+    const key = normalizeCategoryKey(raw);
+    if (!seen.has(key)) {
+      seen.add(key);
+      categories.push(raw);
+    }
+  }
+
+  return categories;
+}
+
+export function resolveMatchingCategory(
+  targetLabel: string,
+  availableCategories: string[],
+): string {
+  const normTarget = normalizeCategoryKey(targetLabel);
+  if (!normTarget || normTarget === 'all') return 'all';
+
+  const exact = availableCategories.find(
+    (cat) => normalizeCategoryKey(cat) === normTarget,
+  );
+  if (exact) return exact;
+
+  // Handle menu label variations (e.g. "Đồ chơi & Quà tặng" -> "Đồ chơi Quà tặng")
+  const partial = availableCategories.find((cat) => {
+    const normCat = normalizeCategoryKey(cat);
+    return normTarget.includes(normCat) || normCat.includes(normTarget);
+  });
+  if (partial) return partial;
+
+  return targetLabel;
 }
 
 export interface FilterProductsOptions {
@@ -38,10 +84,20 @@ export function filterAndSortProducts(
   options: FilterProductsOptions,
 ): Product[] {
   const normalizedQuery = normalizeVietnameseText(options.query);
+  const normalizedSelectedCat = normalizeCategoryKey(options.category);
 
   const filtered = products.filter((product) => {
-    if (options.category !== 'all' && product.category !== options.category) {
-      return false;
+    if (options.category !== 'all' && normalizedSelectedCat !== 'all') {
+      const normProdCat = normalizeCategoryKey(
+        product.category || product.categoryLabel || '',
+      );
+      const matchesCategory =
+        normProdCat === normalizedSelectedCat ||
+        normalizedSelectedCat.includes(normProdCat) ||
+        normProdCat.includes(normalizedSelectedCat);
+      if (!matchesCategory) {
+        return false;
+      }
     }
     if (options.inStockOnly && product.stock <= 0) {
       return false;
@@ -50,12 +106,15 @@ export function filterAndSortProducts(
       return true;
     }
     const haystack = normalizeVietnameseText(
-      `${product.name} ${product.sku} ${product.categoryLabel} ${product.description}`,
+      `${product.name} ${product.sku} ${product.barcode ?? ''} ${product.brand ?? ''} ${product.category} ${product.categoryLabel} ${product.notes ?? ''} ${product.description}`,
     );
     return haystack.includes(normalizedQuery);
   });
 
   return [...filtered].sort((a, b) => {
+    if (options.sortBy === 'name-asc') {
+      return a.name.localeCompare(b.name, 'vi');
+    }
     if (options.sortBy === 'price-asc') {
       return a.price - b.price;
     }

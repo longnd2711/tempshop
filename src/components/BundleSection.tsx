@@ -1,14 +1,20 @@
 import { Check, Plus } from 'lucide-react';
 import { useState } from 'react';
-import { BUNDLE_PACKS, PRODUCTS } from '../data/catalog';
-import type { BundlePack } from '../types/shop';
+import type { BundlePack, Product } from '../types/shop';
 import { formatVnd } from '../utils/shopLogic';
+import { SafeImage } from './SafeImage';
 
 interface BundleSectionProps {
+  bundles: BundlePack[];
+  products: Product[];
   onAddBundle: (bundle: BundlePack) => void;
 }
 
-export function BundleSection({ onAddBundle }: BundleSectionProps) {
+export function BundleSection({
+  bundles,
+  products,
+  onAddBundle,
+}: BundleSectionProps) {
   const [recentlyAddedId, setRecentlyAddedId] = useState<string | null>(null);
 
   const handleSelectBundle = (bundle: BundlePack) => {
@@ -22,7 +28,7 @@ export function BundleSection({ onAddBundle }: BundleSectionProps) {
   return (
     <section
       id="bundles"
-      className="scroll-mt-20 py-12 lg:py-16 bg-white border-t border-b border-slate-200"
+      className="scroll-mt-16 md:scroll-mt-20 py-10 sm:py-12 lg:py-16 bg-white border-t border-b border-slate-200"
     >
       <div className="max-w-[1200px] mx-auto px-4 sm:px-6">
         <div className="max-w-2xl">
@@ -34,83 +40,113 @@ export function BundleSection({ onAddBundle }: BundleSectionProps) {
           </p>
         </div>
 
-        <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {BUNDLE_PACKS.map((bundle) => {
+        {bundles.length === 0 ? (
+          <div className="mt-6 p-6 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600">
+            Hiện chưa có combo nào được kích hoạt trên hệ thống. Quý khách vui lòng chọn lẻ các sản phẩm ở danh mục phía trên hoặc nhắn Zalo 0916 319 452 để shop hỗ trợ soạn đơn nhanh.
+          </div>
+        ) : (
+          <div className="mt-6 sm:mt-8 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+          {bundles.map((bundle) => {
             const isAdded = recentlyAddedId === bundle.id;
-            const resolvedItems = bundle.items
-              .map((entry) => {
-                const product = PRODUCTS.find((p) => p.id === entry.productId);
-                return product ? { product, quantity: entry.quantity } : null;
-              })
-              .filter(Boolean) as { product: (typeof PRODUCTS)[number]; quantity: number }[];
+            const resolvedItems = bundle.items.map((entry) => {
+              const matched = products.find((p) => p.id === entry.productId);
+              return {
+                key: `${bundle.id}-${entry.productId}`,
+                name: entry.productName ?? matched?.name ?? entry.productId,
+                quantity: entry.quantity,
+              };
+            });
 
             return (
               <div
                 key={bundle.id}
-                className="flex flex-col justify-between p-6 bg-slate-50/70 border border-slate-200 rounded-xl"
+                className="flex flex-col justify-between bg-slate-50/70 border border-slate-200 rounded-xl overflow-hidden"
               >
-                <div>
-                  <p className="text-xs font-medium text-slate-500">
-                    {bundle.audience}
-                  </p>
-                  <h3 className="mt-1.5 font-display text-lg font-bold text-slate-900">
-                    {bundle.title}
-                  </h3>
-                  <p className="mt-1.5 text-sm text-slate-600">
-                    {bundle.subtitle}
-                  </p>
+                {bundle.image && (
+                  <div className="aspect-[16/9] w-full bg-slate-100 border-b border-slate-200 overflow-hidden">
+                    <SafeImage
+                      src={bundle.image}
+                      alt={bundle.title}
+                      fallbackLabel={bundle.title}
+                      className="w-full h-full object-cover object-center"
+                    />
+                  </div>
+                )}
 
-                  <ul className="mt-4 pt-4 border-t border-slate-200 space-y-2 text-sm text-slate-700">
-                    {resolvedItems.map(({ product, quantity }) => (
-                      <li
-                        key={product.id}
-                        className="flex items-start justify-between gap-3"
-                      >
-                        <span className="leading-snug">{product.name}</span>
-                        <span className="font-mono text-xs text-slate-500 whitespace-nowrap shrink-0 tabular-nums mt-0.5">
-                          x{quantity}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="mt-6 pt-4 border-t border-slate-200 flex items-center justify-between gap-4">
+                <div className="p-5 sm:p-6 flex flex-col flex-1 justify-between">
                   <div>
-                    <p className="text-lg font-bold text-slate-900 tabular-nums">
-                      {formatVnd(bundle.bundlePrice)}
+                    <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
+                      <span className="font-mono font-medium text-slate-600">
+                        {bundle.comboCode}
+                      </span>
+                      {bundle.discountAmount > 0 && (
+                        <span className="font-medium text-emerald-700 tabular-nums">
+                          Giảm {formatVnd(bundle.discountAmount)}
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="mt-1.5 font-display text-lg font-bold text-slate-900">
+                      {bundle.title}
+                    </h3>
+                    <p className="mt-1.5 text-sm text-slate-600">
+                      {bundle.subtitle}
                     </p>
-                    <p className="text-xs text-slate-500 line-through tabular-nums">
-                      Mua lẻ {formatVnd(bundle.originalPrice)}
-                    </p>
+
+                    <ul className="mt-4 pt-4 border-t border-slate-200 space-y-2 text-sm text-slate-700">
+                      {resolvedItems.map((item) => (
+                        <li
+                          key={item.key}
+                          className="flex items-start justify-between gap-3"
+                        >
+                          <span className="leading-snug">{item.name}</span>
+                          <span className="font-mono text-xs text-slate-500 whitespace-nowrap shrink-0 tabular-nums mt-0.5">
+                            x{item.quantity}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleSelectBundle(bundle)}
-                    className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 ${
-                      isAdded
-                        ? 'bg-emerald-700 text-white'
-                        : 'bg-blue-700 hover:bg-blue-800 text-white'
-                    }`}
-                  >
-                    {isAdded ? (
-                      <>
-                        <Check className="w-4 h-4 shrink-0" aria-hidden="true" />
-                        <span>Đã thêm vào giỏ</span>
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
-                        <span>Thêm cả combo</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="mt-6 pt-4 border-t border-slate-200 flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-lg font-bold text-slate-900 tabular-nums">
+                        {formatVnd(bundle.bundlePrice)}
+                      </p>
+                      {bundle.originalPrice > bundle.bundlePrice && (
+                        <p className="text-xs text-slate-500 line-through tabular-nums">
+                          Mua lẻ {formatVnd(bundle.originalPrice)}
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSelectBundle(bundle)}
+                      className={`inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[40px] px-4 py-2.5 text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 ${
+                        isAdded
+                          ? 'bg-emerald-700 text-white'
+                          : 'bg-blue-700 hover:bg-blue-800 text-white'
+                      }`}
+                    >
+                      {isAdded ? (
+                        <>
+                          <Check className="w-4 h-4 shrink-0" aria-hidden="true" />
+                          <span>Đã thêm vào giỏ</span>
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
+                          <span>Thêm cả combo</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
             );
           })}
-        </div>
+          </div>
+        )}
       </div>
     </section>
   );

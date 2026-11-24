@@ -7,7 +7,7 @@ interface ProductCardProps {
   product: Product;
   cartQuantity: number;
   onQuickAdd: (product: Product) => void;
-  onUpdateQuantity: (product: string, variant: string, delta: number) => void;
+  onUpdateQuantity: (productId: string, variant: string, delta: number) => void;
   onOpenDetail: (product: Product) => void;
 }
 
@@ -38,10 +38,10 @@ export function ProductCard({
         </div>
       </button>
 
-      <div className="flex flex-col flex-1 p-5">
+      <div className="flex flex-col flex-1 p-4 sm:p-5">
         <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
           <span className="truncate">
-            {product.categoryLabel}
+            {product.categoryLabel || product.category}
             <span aria-hidden="true"> · </span>
             <span className="font-mono">{product.sku}</span>
           </span>
@@ -56,7 +56,7 @@ export function ProductCard({
           type="button"
           onClick={() => onOpenDetail(product)}
           aria-label={`Mở thông tin ${product.name}`}
-          className="mt-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 rounded-sm cursor-pointer"
+          className="mt-1.5 sm:mt-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 rounded-sm cursor-pointer"
         >
           <h3 className="font-display text-base font-semibold text-slate-900 leading-snug line-clamp-2 group-hover:text-blue-700 transition-colors">
             {product.name}
@@ -64,13 +64,13 @@ export function ProductCard({
         </button>
 
         <p className="mt-1.5 text-xs text-slate-500 truncate">
-          Phân loại: {defaultVariant}
-          {product.variants.length > 1
+          {product.brand ? `Hãng: ${product.brand}` : `Phân loại: ${defaultVariant}`}
+          {product.variants.length > 1 && !product.brand
             ? ` (+${product.variants.length - 1} lựa chọn)`
             : ''}
         </p>
 
-        <div className="mt-auto pt-4 flex items-center justify-between gap-3 border-t border-slate-100">
+        <div className="mt-auto pt-3.5 sm:pt-4 flex items-center justify-between gap-3 border-t border-slate-100">
           <div>
             <p className="text-base font-semibold text-slate-900 tabular-nums">
               {formatVnd(product.price)}
@@ -91,7 +91,7 @@ export function ProductCard({
                 type="button"
                 onClick={() => onUpdateQuantity(product.id, defaultVariant, -1)}
                 aria-label={`Giảm số lượng ${product.name}`}
-                className="w-9 h-9 inline-flex items-center justify-center text-blue-800 hover:bg-blue-100 rounded-l-lg transition-colors focus-visible:outline-2 focus-visible:outline-blue-700 cursor-pointer"
+                className="w-10 h-11 sm:w-9 sm:h-9 inline-flex items-center justify-center text-blue-800 hover:bg-blue-100 rounded-l-lg transition-colors focus-visible:outline-2 focus-visible:outline-blue-700 cursor-pointer"
               >
                 <Minus className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
@@ -102,7 +102,7 @@ export function ProductCard({
                 type="button"
                 onClick={() => onUpdateQuantity(product.id, defaultVariant, 1)}
                 aria-label={`Tăng số lượng ${product.name}`}
-                className="w-9 h-9 inline-flex items-center justify-center text-blue-800 hover:bg-blue-100 rounded-r-lg transition-colors focus-visible:outline-2 focus-visible:outline-blue-700 cursor-pointer"
+                className="w-10 h-11 sm:w-9 sm:h-9 inline-flex items-center justify-center text-blue-800 hover:bg-blue-100 rounded-r-lg transition-colors focus-visible:outline-2 focus-visible:outline-blue-700 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
@@ -112,7 +112,7 @@ export function ProductCard({
               type="button"
               onClick={() => onQuickAdd(product)}
               aria-label={`Thêm ${product.name} vào giỏ hàng`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 cursor-pointer"
+              className="inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[38px] px-4 sm:px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               <span>Thêm nhanh</span>

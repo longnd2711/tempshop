@@ -17,11 +17,13 @@ export function ProductModal({
 }: ProductModalProps) {
   const [selectedVariant, setSelectedVariant] = useState('');
   const [quantity, setQuantity] = useState(1);
+  const [activeImageIdx, setActiveImageIdx] = useState(0);
 
   useEffect(() => {
     if (product) {
       setSelectedVariant(product.variants[0] ?? 'Tiêu chuẩn');
       setQuantity(1);
+      setActiveImageIdx(0);
     }
   }, [product]);
 
@@ -38,45 +40,83 @@ export function ProductModal({
 
   if (!product) return null;
 
+  const galleryImages =
+    product.images && product.images.length > 0
+      ? product.images
+      : product.image
+        ? [product.image]
+        : [];
+  const mainImage = galleryImages[activeImageIdx] ?? product.image;
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-[2px]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="product-modal-title"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-2xl bg-white rounded-xl border border-slate-200 shadow-xl overflow-hidden"
+        className="relative w-full max-w-2xl max-h-[92vh] overflow-y-auto bg-white rounded-xl border border-slate-200 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <button
           type="button"
           onClick={onClose}
           aria-label="Đóng chi tiết sản phẩm"
-          className="absolute top-3 right-3 z-10 w-9 h-9 inline-flex items-center justify-center rounded-lg bg-white/90 text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer"
+          className="absolute top-3 right-3 z-10 w-10 h-10 inline-flex items-center justify-center rounded-lg bg-white/95 text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer"
         >
           <X className="w-4 h-4" aria-hidden="true" />
         </button>
 
         <div className="grid grid-cols-1 md:grid-cols-12 items-stretch">
-          <div className="md:col-span-6 bg-slate-100 border-b md:border-b-0 md:border-r border-slate-200">
-            <div className="aspect-[4/3] md:h-full w-full">
+          <div className="md:col-span-6 bg-slate-100 border-b md:border-b-0 md:border-r border-slate-200 flex flex-col">
+            <div className="aspect-[4/3] md:flex-1 w-full">
               <SafeImage
-                src={product.image}
+                src={mainImage}
                 alt={product.name}
                 fallbackLabel={product.name}
                 className="w-full h-full object-cover object-center"
               />
             </div>
+
+            {galleryImages.length > 1 && (
+              <div className="p-2.5 bg-white border-t border-slate-200 flex items-center gap-2 overflow-x-auto">
+                {galleryImages.map((imgUrl, idx) => (
+                  <button
+                    key={imgUrl + idx}
+                    type="button"
+                    onClick={() => setActiveImageIdx(idx)}
+                    aria-label={`Xem ảnh ${idx + 1} của ${product.name}`}
+                    className={`w-12 h-12 rounded-md overflow-hidden border-2 shrink-0 cursor-pointer ${
+                      idx === activeImageIdx
+                        ? 'border-blue-700'
+                        : 'border-slate-200 opacity-75 hover:opacity-100'
+                    }`}
+                  >
+                    <SafeImage
+                      src={imgUrl}
+                      alt={`${product.name} ${idx + 1}`}
+                      className="w-full h-full object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          <div className="md:col-span-6 p-6 flex flex-col justify-between">
+          <div className="md:col-span-6 p-5 sm:p-6 flex flex-col justify-between">
             <div>
               <p className="text-xs text-slate-500">
-                {product.categoryLabel}
+                {product.categoryLabel || product.category}
                 <span aria-hidden="true"> · </span>
                 <span className="font-mono">{product.sku}</span>
+                {product.brand && (
+                  <>
+                    <span aria-hidden="true"> · </span>
+                    <span>{product.brand}</span>
+                  </>
+                )}
               </p>
 
               <h3
@@ -94,7 +134,7 @@ export function ProductModal({
               </div>
 
               <p className="mt-3 text-sm text-slate-600 leading-relaxed">
-                {product.description}
+                {product.notes || product.description}
               </p>
 
               <div className="mt-5">
@@ -109,7 +149,7 @@ export function ProductModal({
                         key={variant}
                         type="button"
                         onClick={() => setSelectedVariant(variant)}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`min-h-[38px] px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
                           active
                             ? 'border-blue-700 bg-blue-50 text-blue-800'
                             : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
@@ -140,7 +180,7 @@ export function ProductModal({
                     disabled={quantity <= 1}
                     onClick={() => setQuantity((q) => Math.max(1, q - 1))}
                     aria-label="Giảm số lượng đặt"
-                    className="w-9 h-9 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 disabled:opacity-40 rounded-l-lg cursor-pointer"
+                    className="w-10 h-10 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 disabled:opacity-40 rounded-l-lg cursor-pointer"
                   >
                     <Minus className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
@@ -151,7 +191,7 @@ export function ProductModal({
                     type="button"
                     onClick={() => setQuantity((q) => q + 1)}
                     aria-label="Tăng số lượng đặt"
-                    className="w-9 h-9 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 rounded-r-lg cursor-pointer"
+                    className="w-10 h-10 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 rounded-r-lg cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
@@ -164,7 +204,7 @@ export function ProductModal({
                   onAddToCart(product, selectedVariant, quantity);
                   onClose();
                 }}
-                className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors cursor-pointer"
+                className="w-full min-h-[44px] py-2.5 px-4 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors cursor-pointer"
               >
                 Thêm vào giỏ · {formatVnd(product.price * quantity)}
               </button>

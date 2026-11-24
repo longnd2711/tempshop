@@ -1,6 +1,6 @@
-export type CategoryId = 'all' | 'stationery' | 'school' | 'toys' | 'grocery';
+export type CategoryId = string;
 
-export type SortOption = 'popular' | 'price-asc' | 'price-desc';
+export type SortOption = 'name-asc' | 'price-asc' | 'price-desc' | 'popular';
 
 export type DeliveryMethod = 'delivery' | 'pickup';
 
@@ -9,17 +9,26 @@ export type PaymentMethod = 'cod' | 'transfer';
 export interface Product {
   id: string;
   sku: string;
+  barcode?: string;
   name: string;
-  category: Exclude<CategoryId, 'all'>;
+  brand?: string;
+  category: string;
   categoryLabel: string;
   price: number;
+  costPrice?: number;
   unit: string;
+  baseUnit?: string;
+  conversionRate?: number;
   stock: number;
+  minStock?: number;
+  maxStock?: number;
   popularRank: number;
   variants: string[];
   image: string;
+  images?: string[];
   imageFocusClass?: string;
   description: string;
+  notes?: string;
   featuredTag?: string;
 }
 
@@ -35,14 +44,28 @@ export interface CartItem {
   image: string;
 }
 
+export interface BundleItemEntry {
+  productId: string;
+  quantity: number;
+  productName?: string;
+  productPrice?: number;
+  productUnit?: string;
+  productImage?: string;
+  productSku?: string;
+}
+
 export interface BundlePack {
   id: string;
+  comboCode: string;
   title: string;
   subtitle: string;
-  audience: string;
-  items: { productId: string; quantity: number }[];
+  audience?: string;
+  items: BundleItemEntry[];
+  discountAmount: number;
   bundlePrice: number;
   originalPrice: number;
+  isActive?: boolean;
+  image?: string;
 }
 
 export interface CheckoutFormData {

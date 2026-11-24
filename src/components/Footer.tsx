@@ -6,7 +6,7 @@ interface FooterProps {
 
 export function Footer({ onSelectNavCategory }: FooterProps) {
   return (
-    <footer className="bg-white border-t border-slate-200 py-8">
+    <footer className="bg-white border-t border-slate-200 pt-8 pb-24 md:pb-8">
       <div className="max-w-[1200px] mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-xs sm:text-sm text-slate-500">
         <div>
           <p className="font-display font-semibold text-slate-900">
@@ -20,27 +20,27 @@ export function Footer({ onSelectNavCategory }: FooterProps) {
         <div className="flex flex-wrap items-center gap-5 shrink-0">
           <a
             href="#catalog"
-            onClick={() => onSelectNavCategory('stationery')}
+            onClick={() => onSelectNavCategory('Văn phòng phẩm')}
             className="hover:text-slate-900 transition-colors"
           >
             Văn phòng phẩm
           </a>
           <a
             href="#catalog"
-            onClick={() => onSelectNavCategory('school')}
+            onClick={() => onSelectNavCategory('Đồ dùng học sinh')}
             className="hover:text-slate-900 transition-colors"
           >
             Đồ dùng học sinh
           </a>
-          <a href="#bundles" className="hover:text-slate-900 transition-colors">
-            Combo nhanh
-          </a>
           <a
             href="#catalog"
-            onClick={() => onSelectNavCategory('toys')}
+            onClick={() => onSelectNavCategory('Đồ chơi & Quà tặng')}
             className="hover:text-slate-900 transition-colors"
           >
             Đồ chơi &amp; Quà tặng
+          </a>
+          <a href="#bundles" className="hover:text-slate-900 transition-colors">
+            Combo nhanh
           </a>
         </div>
       </div>

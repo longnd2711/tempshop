@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ShoppingBag } from 'lucide-react';
 import { CartDrawer } from './components/CartDrawer';
 import { CatalogSection } from './components/CatalogSection';
@@ -9,8 +9,13 @@ import { HeroSection } from './components/HeroSection';
 import { ProductModal } from './components/ProductModal';
 import { BundleSection } from './components/BundleSection';
 import { StoreInfoSection } from './components/StoreInfoSection';
-import { PRODUCTS } from './data/catalog';
-import { fetchProductsFromSupabase } from './lib/supabaseProducts';
+import { BUNDLE_PACKS, PRODUCTS } from './data/catalog';
+import {
+  BACKGROUND_SYNC_INTERVAL_MS,
+  fetchCatalogFromSupabase,
+  loadCachedCatalog,
+  saveCachedCatalog,
+} from './lib/supabaseProducts';
 import type {
   BundlePack,
   CartItem,
@@ -21,8 +26,10 @@ import type {
 } from './types/shop';
 import {
   calculateCartSummary,
+  extractCategories,
   filterAndSortProducts,
   formatVnd,
+  resolveMatchingCategory,
 } from './utils/shopLogic';
 
 const CART_STORAGE_KEY = 'tiem_an_nhien_cart_v1';
@@ -50,7 +57,14 @@ function loadLastOrder(): OrderRecord | null {
 }
 
 export default function App() {
-  const [catalogProducts, setCatalogProducts] = useState<Product[]>(PRODUCTS);
+  const initialCache = useMemo(() => loadCachedCatalog(), []);
+
+  const [catalogProducts, setCatalogProducts] = useState<Product[]>(
+    () => initialCache?.products ?? PRODUCTS,
+  );
+  const [catalogBundles, setCatalogBundles] = useState<BundlePack[]>(
+    () => initialCache?.combos ?? BUNDLE_PACKS,
+  );
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
   const [catalogNotice, setCatalogNotice] = useState<string | undefined>(
     undefined,
@@ -58,29 +72,83 @@ export default function App() {
 
   const [selectedCategory, setSelectedCategory] = useState<CategoryId>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<SortOption>('popular');
+  const [sortBy, setSortBy] = useState<SortOption>('name-asc');
 
   const [cartItems, setCartItems] = useState<CartItem[]>(loadStoredCart);
   const [lastOrder, setLastOrder] = useState<OrderRecord | null>(loadLastOrder);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [activeProduct, setActiveProduct] = useState<Product | null>(null);
 
-  useEffect(() => {
-    let active = true;
-    setIsLoadingCatalog(true);
-    fetchProductsFromSupabase()
-      .then((result) => {
-        if (!active) return;
+  const syncCatalog = useCallback(async (showSpinner: boolean) => {
+    if (showSpinner) {
+      setIsLoadingCatalog(true);
+    }
+    try {
+      const result = await fetchCatalogFromSupabase();
+      if (result.source === 'supabase') {
         setCatalogProducts(result.products);
+        setCatalogBundles(result.combos);
+        setCatalogNotice(undefined);
+        saveCachedCatalog({
+          products: result.products,
+          combos: result.combos,
+          syncedAt: result.syncedAt,
+          source: 'supabase',
+        });
+      } else {
+        // Offline or demo fallback: preserve cached Supabase data if already stored offline
+        const existingCache = loadCachedCatalog();
+        if (existingCache && existingCache.source === 'supabase') {
+          setCatalogProducts(existingCache.products);
+          setCatalogBundles(existingCache.combos);
+        } else {
+          setCatalogProducts(result.products);
+          setCatalogBundles(result.combos);
+          saveCachedCatalog({
+            products: result.products,
+            combos: result.combos,
+            syncedAt: result.syncedAt,
+            source: 'demo',
+          });
+        }
         setCatalogNotice(result.errorMessage);
-      })
-      .finally(() => {
-        if (active) setIsLoadingCatalog(false);
-      });
-    return () => {
-      active = false;
-    };
+      }
+    } finally {
+      if (showSpinner) {
+        setIsLoadingCatalog(false);
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    // Ensure offline cache exists from first visit immediately
+    if (!initialCache) {
+      saveCachedCatalog({
+        products: PRODUCTS,
+        combos: BUNDLE_PACKS,
+        syncedAt: Date.now(),
+        source: 'demo',
+      });
+    }
+
+    // Immediate background sync on mount (or silent update on subsequent visits)
+    void syncCatalog(false);
+
+    // Silent background sync every 10 minutes
+    const intervalId = window.setInterval(() => {
+      void syncCatalog(false);
+    }, BACKGROUND_SYNC_INTERVAL_MS);
+
+    const handleOnline = () => {
+      void syncCatalog(false);
+    };
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [initialCache, syncCatalog]);
 
   useEffect(() => {
     try {
@@ -102,6 +170,11 @@ export default function App() {
       // Ignore storage quota errors
     }
   }, [lastOrder]);
+
+  const availableCategories = useMemo(
+    () => extractCategories(catalogProducts),
+    [catalogProducts],
+  );
 
   const filteredProducts = useMemo(
     () =>
@@ -141,7 +214,7 @@ export default function App() {
           productId: product.id,
           sku: product.sku,
           name: product.name,
-          categoryLabel: product.categoryLabel,
+          categoryLabel: product.categoryLabel || product.category,
           unit: product.unit,
           variant,
           unitPrice: product.price,
@@ -184,14 +257,53 @@ export default function App() {
   };
 
   const handleAddBundle = (bundle: BundlePack) => {
-    bundle.items.forEach(({ productId, quantity }) => {
-      const product =
-        catalogProducts.find((p) => p.id === productId) ??
-        PRODUCTS.find((p) => p.id === productId);
-      if (product) {
-        const defaultVariant = product.variants[0] ?? 'Tiêu chuẩn';
-        addToCart(product, defaultVariant, quantity);
+    const comboCartId = `combo:${bundle.id}`;
+    const itemSummary = bundle.items
+      .map((entry) => {
+        const prod =
+          catalogProducts.find((p) => p.id === entry.productId) ??
+          PRODUCTS.find((p) => p.id === entry.productId);
+        const label = entry.productName ?? prod?.name ?? entry.productId;
+        return `${label} x${entry.quantity}`;
+      })
+      .join(', ');
+    const comboVariant = itemSummary || `${bundle.items.length} món`;
+    const fallbackImage =
+      bundle.image ??
+      bundle.items
+        .map(
+          (entry) =>
+            entry.productImage ??
+            catalogProducts.find((p) => p.id === entry.productId)?.image,
+        )
+        .find(Boolean) ??
+      '';
+
+    setCartItems((prev) => {
+      const existingIndex = prev.findIndex(
+        (item) => item.productId === comboCartId,
+      );
+      if (existingIndex >= 0) {
+        return prev.map((item, idx) =>
+          idx === existingIndex
+            ? { ...item, quantity: item.quantity + 1 }
+            : item,
+        );
       }
+      return [
+        ...prev,
+        {
+          productId: comboCartId,
+          sku: bundle.comboCode,
+          name: bundle.title,
+          categoryLabel: 'Combo nhanh',
+          unit: 'Combo',
+          variant: comboVariant,
+          unitPrice: bundle.bundlePrice,
+          quantity: 1,
+          image: fallbackImage,
+        },
+      ];
     });
   };
 
@@ -205,11 +317,12 @@ export default function App() {
   const handleResetFilters = () => {
     setSelectedCategory('all');
     setSearchQuery('');
-    setSortBy('popular');
+    setSortBy('name-asc');
   };
 
   const handleSelectNavCategory = (category: CategoryId) => {
-    setSelectedCategory(category);
+    const resolved = resolveMatchingCategory(category, availableCategories);
+    setSelectedCategory(resolved);
     setSearchQuery('');
   };
 
@@ -230,6 +343,7 @@ export default function App() {
         <CatalogSection
           products={filteredProducts}
           allProductsCount={catalogProducts.length}
+          categories={availableCategories}
           selectedCategory={selectedCategory}
           onSelectCategory={setSelectedCategory}
           searchQuery={searchQuery}
@@ -245,7 +359,11 @@ export default function App() {
           catalogNotice={catalogNotice}
         />
 
-        <BundleSection onAddBundle={handleAddBundle} />
+        <BundleSection
+          bundles={catalogBundles}
+          products={catalogProducts}
+          onAddBundle={handleAddBundle}
+        />
 
         <StoreInfoSection
           lastOrder={lastOrder}
