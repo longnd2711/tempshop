@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import QRCode from 'qrcode';
 import { formatVnd } from '../utils/shopLogic';
-import { buildVietQrPayload } from '../utils/vietqr';
+import { buildVietQrImageUrl, buildVietQrPayload } from '../utils/vietqr';
 
 export const VIB_ACCOUNT_NUMBER = '916219452';
 export const VIB_BANK_BIN = '970441';
+export const VIB_ACCOUNT_NAME = 'Nguyễn Thu Hương';
 
 interface BankTransferQRProps {
   amount: number;
@@ -13,12 +14,22 @@ interface BankTransferQRProps {
 }
 
 export function BankTransferQR({ amount, orderId }: BankTransferQRProps) {
-  const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [fallbackDataUrl, setFallbackDataUrl] = useState<string>('');
+  const [useFallbackQr, setUseFallbackQr] = useState(false);
   const [copiedField, setCopiedField] = useState<'account' | 'content' | null>(
     null,
   );
 
+  const vietQrUrl = buildVietQrImageUrl({
+    bankBin: VIB_BANK_BIN,
+    accountNumber: VIB_ACCOUNT_NUMBER,
+    amount,
+    orderId,
+    accountName: VIB_ACCOUNT_NAME,
+  });
+
   useEffect(() => {
+    setUseFallbackQr(false);
     let active = true;
     const payload = buildVietQrPayload({
       bankBin: VIB_BANK_BIN,
@@ -37,10 +48,10 @@ export function BankTransferQR({ amount, orderId }: BankTransferQRProps) {
       },
     })
       .then((url) => {
-        if (active) setQrDataUrl(url);
+        if (active) setFallbackDataUrl(url);
       })
       .catch(() => {
-        if (active) setQrDataUrl('');
+        if (active) setFallbackDataUrl('');
       });
 
     return () => {
@@ -48,10 +59,7 @@ export function BankTransferQR({ amount, orderId }: BankTransferQRProps) {
     };
   }, [amount, orderId]);
 
-  const copyValue = async (
-    field: 'account' | 'content',
-    value: string,
-  ) => {
+  const copyValue = async (field: 'account' | 'content', value: string) => {
     try {
       await navigator.clipboard.writeText(value);
       setCopiedField(field);
@@ -63,17 +71,29 @@ export function BankTransferQR({ amount, orderId }: BankTransferQRProps) {
     }
   };
 
+  const activeImgSrc = useFallbackQr ? fallbackDataUrl : vietQrUrl;
+
   return (
     <div
       data-testid="bank-transfer-qr"
       className="p-4 bg-slate-50 border border-blue-200 rounded-xl space-y-3"
     >
+      <p className="text-xs font-semibold text-blue-800">
+        Chuyển khoản hoặc thanh toán tiền mặt
+      </p>
+
       <div className="flex flex-col sm:flex-row items-center gap-4">
-        <div className="w-40 h-40 bg-white border border-slate-200 rounded-lg p-2 flex items-center justify-center shrink-0">
-          {qrDataUrl ? (
+        <div className="w-44 h-44 bg-white border border-slate-200 rounded-lg p-1.5 flex items-center justify-center shrink-0 overflow-hidden">
+          {activeImgSrc ? (
             <img
-              src={qrDataUrl}
-              alt={`Mã QR chuyển khoản VIB số tài khoản ${VIB_ACCOUNT_NUMBER} số tiền ${formatVnd(amount)} nội dung ${orderId}`}
+              src={activeImgSrc}
+              referrerPolicy="no-referrer"
+              onError={() => {
+                if (!useFallbackQr && fallbackDataUrl) {
+                  setUseFallbackQr(true);
+                }
+              }}
+              alt={`Mã QR chuyển khoản VIB chủ tài khoản ${VIB_ACCOUNT_NAME} số tài khoản ${VIB_ACCOUNT_NUMBER} số tiền ${formatVnd(amount)} nội dung ${orderId}`}
               className="w-full h-full object-contain"
             />
           ) : (
@@ -85,12 +105,19 @@ export function BankTransferQR({ amount, orderId }: BankTransferQRProps) {
 
         <div className="flex-1 w-full space-y-2 text-xs">
           <p className="font-display text-sm font-bold text-slate-900">
-            Quét mã QR chuyển khoản VIB
+            Thông tin chuyển khoản VIB
           </p>
 
           <div className="flex items-center justify-between gap-2">
             <span className="text-slate-500">Ngân hàng</span>
             <span className="font-semibold text-slate-900">VIB</span>
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-slate-500">Chủ tài khoản</span>
+            <span className="font-semibold text-slate-900">
+              {VIB_ACCOUNT_NAME}
+            </span>
           </div>
 
           <div className="flex items-center justify-between gap-2">

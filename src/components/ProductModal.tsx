@@ -38,8 +38,6 @@ export function ProductModal({
 
   if (!product) return null;
 
-  const outOfStock = product.stock <= 0;
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-[2px]"
@@ -130,7 +128,9 @@ export function ProductModal({
                 <span className="text-xs text-slate-500">
                   Tình trạng:{' '}
                   <strong className="font-medium text-slate-800">
-                    {outOfStock ? 'Tạm hết hàng' : `Còn ${product.stock} ${product.unit.toLowerCase()}`}
+                    {product.stock > 0
+                      ? `Còn ${product.stock} ${product.unit.toLowerCase()}`
+                      : 'Nhận đặt hàng'}
                   </strong>
                 </span>
 
@@ -149,12 +149,9 @@ export function ProductModal({
                   </span>
                   <button
                     type="button"
-                    disabled={outOfStock || quantity >= product.stock}
-                    onClick={() =>
-                      setQuantity((q) => Math.min(product.stock, q + 1))
-                    }
+                    onClick={() => setQuantity((q) => q + 1)}
                     aria-label="Tăng số lượng đặt"
-                    className="w-9 h-9 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 disabled:opacity-40 rounded-r-lg cursor-pointer"
+                    className="w-9 h-9 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 rounded-r-lg cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
@@ -163,16 +160,13 @@ export function ProductModal({
 
               <button
                 type="button"
-                disabled={outOfStock}
                 onClick={() => {
                   onAddToCart(product, selectedVariant, quantity);
                   onClose();
                 }}
-                className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 disabled:bg-slate-300 rounded-lg transition-colors cursor-pointer"
+                className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors cursor-pointer"
               >
-                {outOfStock
-                  ? 'Sản phẩm tạm hết hàng'
-                  : `Thêm vào giỏ · ${formatVnd(product.price * quantity)}`}
+                Thêm vào giỏ · {formatVnd(product.price * quantity)}
               </button>
             </div>
           </div>

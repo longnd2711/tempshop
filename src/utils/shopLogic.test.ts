@@ -7,7 +7,11 @@ import {
   normalizeVietnameseText,
   validateCheckoutForm,
 } from './shopLogic';
-import { buildVietQrPayload } from './vietqr';
+import { buildVietQrImageUrl, buildVietQrPayload } from './vietqr';
+import {
+  mapSupabaseRowToProduct,
+  normalizeGoogleDriveImageUrl,
+} from '../lib/supabaseProducts';
 import type { CartItem, Product } from '../types/shop';
 
 const sampleProducts: Product[] = [
@@ -146,6 +150,58 @@ test('buildVietQrPayload encodes VIB account, exact amount, and order ID with CR
   assert.ok(payload.includes('5406162000'));
   assert.ok(payload.includes('DH-2015-408'));
   assert.match(payload, /6304[0-9A-F]{4}$/);
+});
+
+test('buildVietQrImageUrl formats official VietQR compact2 image URL with Nguyễn Thu Hương', () => {
+  const url = buildVietQrImageUrl({
+    accountNumber: '916219452',
+    amount: 135000,
+    orderId: 'DH-0542-123',
+    accountName: 'Nguyễn Thu Hương',
+  });
+  assert.ok(
+    url.startsWith('https://img.vietqr.io/image/970441-916219452-compact2.png?'),
+  );
+  const parsed = new URL(url);
+  assert.equal(parsed.searchParams.get('amount'), '135000');
+  assert.equal(parsed.searchParams.get('addInfo'), 'DH-0542-123');
+  assert.equal(parsed.searchParams.get('accountName'), 'Nguyễn Thu Hương');
+});
+
+test('normalizeGoogleDriveImageUrl converts share links into direct thumbnail URLs', () => {
+  assert.equal(
+    normalizeGoogleDriveImageUrl(
+      'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view?usp=sharing',
+    ),
+    'https://drive.google.com/thumbnail?id=1AbCdEfGhIjKlMnOp&sz=w800',
+  );
+  assert.equal(
+    normalizeGoogleDriveImageUrl('https://drive.google.com/open?id=XYZ987'),
+    'https://drive.google.com/thumbnail?id=XYZ987&sz=w800',
+  );
+});
+
+test('mapSupabaseRowToProduct maps img_url and allows stock <= 0', () => {
+  const mapped = mapSupabaseRowToProduct(
+    {
+      id: 101,
+      sku: 'vpp-99',
+      name: 'Bút bi Thiên Long',
+      category: 'Văn phòng phẩm',
+      price: 5000,
+      unit: 'Cây',
+      stock: 0,
+      img_url: 'https://drive.google.com/file/d/FILE123/view',
+    },
+    0,
+  );
+  assert.equal(mapped.sku, 'VPP-99');
+  assert.equal(mapped.category, 'stationery');
+  assert.equal(mapped.stock, 0);
+  assert.equal(
+    mapped.image,
+    'https://drive.google.com/thumbnail?id=FILE123&sz=w800',
+  );
 });
 
 test('formatVnd formats Vietnamese dong cleanly', () => {

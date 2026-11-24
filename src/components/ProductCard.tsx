@@ -7,7 +7,7 @@ interface ProductCardProps {
   product: Product;
   cartQuantity: number;
   onQuickAdd: (product: Product) => void;
-  onUpdateQuantity: (productId: string, variant: string, delta: number) => void;
+  onUpdateQuantity: (product: string, variant: string, delta: number) => void;
   onOpenDetail: (product: Product) => void;
 }
 
@@ -19,7 +19,6 @@ export function ProductCard({
   onOpenDetail,
 }: ProductCardProps) {
   const defaultVariant = product.variants[0] ?? 'Tiêu chuẩn';
-  const outOfStock = product.stock <= 0;
 
   return (
     <article className="group flex flex-col bg-white border border-slate-200 rounded-xl overflow-hidden transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm">
@@ -79,19 +78,11 @@ export function ProductCard({
             <p className="text-xs text-slate-500">
               {product.unit}
               <span aria-hidden="true"> · </span>
-              {outOfStock ? 'Tạm hết' : `Còn ${product.stock}`}
+              {product.stock > 0 ? `Còn ${product.stock}` : 'Nhận đặt hàng'}
             </p>
           </div>
 
-          {outOfStock ? (
-            <button
-              type="button"
-              disabled
-              className="px-3.5 py-2 text-xs font-medium text-slate-400 bg-slate-100 rounded-lg cursor-not-allowed whitespace-nowrap shrink-0"
-            >
-              Tạm hết
-            </button>
-          ) : cartQuantity > 0 ? (
+          {cartQuantity > 0 ? (
             <div
               className="inline-flex items-center border border-blue-200 bg-blue-50/70 rounded-lg shrink-0"
               aria-label={`Số lượng trong giỏ của ${product.name}`}

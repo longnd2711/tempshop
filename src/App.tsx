@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ShoppingBag } from 'lucide-react';
 import { CartDrawer } from './components/CartDrawer';
 import { CatalogSection } from './components/CatalogSection';
+import { FloatingContactButtons } from './components/FloatingContactButtons';
 import { Footer } from './components/Footer';
 import { Header } from './components/Header';
 import { HeroSection } from './components/HeroSection';
@@ -9,6 +10,7 @@ import { ProductModal } from './components/ProductModal';
 import { BundleSection } from './components/BundleSection';
 import { StoreInfoSection } from './components/StoreInfoSection';
 import { PRODUCTS } from './data/catalog';
+import { fetchProductsFromSupabase } from './lib/supabaseProducts';
 import type {
   BundlePack,
   CartItem,
@@ -48,15 +50,37 @@ function loadLastOrder(): OrderRecord | null {
 }
 
 export default function App() {
+  const [catalogProducts, setCatalogProducts] = useState<Product[]>(PRODUCTS);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
+  const [catalogNotice, setCatalogNotice] = useState<string | undefined>(
+    undefined,
+  );
+
   const [selectedCategory, setSelectedCategory] = useState<CategoryId>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('popular');
-  const [inStockOnly, setInStockOnly] = useState(false);
 
   const [cartItems, setCartItems] = useState<CartItem[]>(loadStoredCart);
   const [lastOrder, setLastOrder] = useState<OrderRecord | null>(loadLastOrder);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [activeProduct, setActiveProduct] = useState<Product | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setIsLoadingCatalog(true);
+    fetchProductsFromSupabase()
+      .then((result) => {
+        if (!active) return;
+        setCatalogProducts(result.products);
+        setCatalogNotice(result.errorMessage);
+      })
+      .finally(() => {
+        if (active) setIsLoadingCatalog(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -81,13 +105,13 @@ export default function App() {
 
   const filteredProducts = useMemo(
     () =>
-      filterAndSortProducts(PRODUCTS, {
+      filterAndSortProducts(catalogProducts, {
         category: selectedCategory,
         query: searchQuery,
         sortBy,
-        inStockOnly,
+        inStockOnly: false,
       }),
-    [selectedCategory, searchQuery, sortBy, inStockOnly],
+    [catalogProducts, selectedCategory, searchQuery, sortBy],
   );
 
   const cartSummary = useMemo(
@@ -96,7 +120,7 @@ export default function App() {
   );
 
   const addToCart = (product: Product, variant: string, quantity: number) => {
-    if (product.stock <= 0 || quantity <= 0) return;
+    if (quantity <= 0) return;
     setCartItems((prev) => {
       const existingIndex = prev.findIndex(
         (item) => item.productId === product.id && item.variant === variant,
@@ -106,7 +130,7 @@ export default function App() {
           idx === existingIndex
             ? {
                 ...item,
-                quantity: Math.min(product.stock, item.quantity + quantity),
+                quantity: item.quantity + quantity,
               }
             : item,
         );
@@ -121,7 +145,7 @@ export default function App() {
           unit: product.unit,
           variant,
           unitPrice: product.price,
-          quantity: Math.min(product.stock, quantity),
+          quantity,
           image: product.image,
         },
       ];
@@ -138,16 +162,13 @@ export default function App() {
     variant: string,
     delta: number,
   ) => {
-    const product = PRODUCTS.find((p) => p.id === productId);
-    const maxStock = product ? product.stock : 99;
-
     setCartItems((prev) =>
       prev
         .map((item) => {
           if (item.productId !== productId || item.variant !== variant) {
             return item;
           }
-          const nextQty = Math.min(maxStock, item.quantity + delta);
+          const nextQty = item.quantity + delta;
           return { ...item, quantity: nextQty };
         })
         .filter((item) => item.quantity > 0),
@@ -164,8 +185,10 @@ export default function App() {
 
   const handleAddBundle = (bundle: BundlePack) => {
     bundle.items.forEach(({ productId, quantity }) => {
-      const product = PRODUCTS.find((p) => p.id === productId);
-      if (product && product.stock > 0) {
+      const product =
+        catalogProducts.find((p) => p.id === productId) ??
+        PRODUCTS.find((p) => p.id === productId);
+      if (product) {
         const defaultVariant = product.variants[0] ?? 'Tiêu chuẩn';
         addToCart(product, defaultVariant, quantity);
       }
@@ -183,13 +206,14 @@ export default function App() {
     setSelectedCategory('all');
     setSearchQuery('');
     setSortBy('popular');
-    setInStockOnly(false);
   };
 
   const handleSelectNavCategory = (category: CategoryId) => {
     setSelectedCategory(category);
     setSearchQuery('');
   };
+
+  const hasMobileCartBar = cartSummary.itemCount > 0 && !isCartOpen;
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
@@ -205,20 +229,20 @@ export default function App() {
 
         <CatalogSection
           products={filteredProducts}
-          allProductsCount={PRODUCTS.length}
+          allProductsCount={catalogProducts.length}
           selectedCategory={selectedCategory}
           onSelectCategory={setSelectedCategory}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           sortBy={sortBy}
           onSortChange={setSortBy}
-          inStockOnly={inStockOnly}
-          onInStockChange={setInStockOnly}
           cartItems={cartItems}
           onQuickAdd={handleQuickAdd}
           onUpdateQuantity={handleUpdateQuantity}
           onOpenDetail={setActiveProduct}
           onResetFilters={handleResetFilters}
+          isLoadingCatalog={isLoadingCatalog}
+          catalogNotice={catalogNotice}
         />
 
         <BundleSection onAddBundle={handleAddBundle} />
@@ -231,7 +255,9 @@ export default function App() {
 
       <Footer onSelectNavCategory={handleSelectNavCategory} />
 
-      {cartSummary.itemCount > 0 && !isCartOpen && (
+      <FloatingContactButtons hasMobileCartBar={hasMobileCartBar} />
+
+      {hasMobileCartBar && (
         <div className="md:hidden fixed bottom-3 inset-x-4 z-30">
           <button
             type="button"

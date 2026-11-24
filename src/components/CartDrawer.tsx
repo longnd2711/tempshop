@@ -6,7 +6,6 @@ import type {
   CheckoutFormData,
   DeliveryMethod,
   OrderRecord,
-  PaymentMethod,
 } from '../types/shop';
 import {
   calculateCartSummary,
@@ -33,7 +32,7 @@ const INITIAL_FORM: CheckoutFormData = {
   address: '',
   note: '',
   deliveryMethod: 'delivery',
-  paymentMethod: 'cod',
+  paymentMethod: 'transfer',
 };
 
 export function CartDrawer({
@@ -108,7 +107,7 @@ export function CartDrawer({
           : form.address.trim(),
       note: form.note.trim(),
       deliveryMethod: form.deliveryMethod,
-      paymentMethod: form.paymentMethod,
+      paymentMethod: 'transfer',
       items: [...items],
       subtotal: summary.subtotal,
       shippingFee: 0,
@@ -183,12 +182,10 @@ export function CartDrawer({
                 </div>
               </div>
 
-              {confirmedOrder.paymentMethod === 'transfer' && (
-                <BankTransferQR
-                  amount={confirmedOrder.total}
-                  orderId={confirmedOrder.orderCode}
-                />
-              )}
+              <BankTransferQR
+                amount={confirmedOrder.total}
+                orderId={confirmedOrder.orderCode}
+              />
 
               <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-sm">
                 <h3 className="font-display font-semibold text-slate-900">
@@ -216,9 +213,7 @@ export function CartDrawer({
                   <p>
                     Thanh toán:{' '}
                     <span className="text-slate-900">
-                      {confirmedOrder.paymentMethod === 'cod'
-                        ? 'Tiền mặt khi nhận hàng (COD)'
-                        : 'Chuyển khoản VIB (916219452)'}
+                      Chuyển khoản hoặc thanh toán tiền mặt
                     </span>
                   </p>
                   {confirmedOrder.note && (
@@ -468,39 +463,10 @@ export function CartDrawer({
                   </div>
                 )}
 
-                <div>
-                  <span className="block text-xs font-medium text-slate-700 mb-1.5">
-                    Phương thức thanh toán
-                  </span>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(
-                      [
-                        { id: 'cod', label: 'Tiền mặt (COD)' },
-                        { id: 'transfer', label: 'Chuyển khoản' },
-                      ] as { id: PaymentMethod; label: string }[]
-                    ).map((method) => (
-                      <button
-                        key={method.id}
-                        type="button"
-                        onClick={() => handleFieldChange('paymentMethod', method.id)}
-                        className={`py-2 px-3 text-xs font-medium rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
-                          form.paymentMethod === method.id
-                            ? 'border-blue-700 bg-blue-50 text-blue-800'
-                            : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
-                        }`}
-                      >
-                        {method.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {form.paymentMethod === 'transfer' && (
-                  <BankTransferQR
-                    amount={summary.total}
-                    orderId={draftOrderCode}
-                  />
-                )}
+                <BankTransferQR
+                  amount={summary.total}
+                  orderId={draftOrderCode}
+                />
 
                 <div>
                   <label

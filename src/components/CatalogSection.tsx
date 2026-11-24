@@ -12,13 +12,13 @@ interface CatalogSectionProps {
   onSearchChange: (value: string) => void;
   sortBy: SortOption;
   onSortChange: (value: SortOption) => void;
-  inStockOnly: boolean;
-  onInStockChange: (value: boolean) => void;
   cartItems: CartItem[];
   onQuickAdd: (product: Product) => void;
   onUpdateQuantity: (productId: string, variant: string, delta: number) => void;
   onOpenDetail: (product: Product) => void;
   onResetFilters: () => void;
+  isLoadingCatalog?: boolean;
+  catalogNotice?: string;
 }
 
 export function CatalogSection({
@@ -30,13 +30,13 @@ export function CatalogSection({
   onSearchChange,
   sortBy,
   onSortChange,
-  inStockOnly,
-  onInStockChange,
   cartItems,
   onQuickAdd,
   onUpdateQuantity,
   onOpenDetail,
   onResetFilters,
+  isLoadingCatalog = false,
+  catalogNotice,
 }: CatalogSectionProps) {
   const getDefaultCartQty = (product: Product) => {
     const defaultVariant = product.variants[0] ?? 'Tiêu chuẩn';
@@ -52,47 +52,43 @@ export function CatalogSection({
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-6 border-b border-slate-200">
           <div>
             <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
-              Danh mục chọn mua nhanh
+              Tìm kiếm hàng hóa
             </h2>
             <p className="mt-1.5 text-sm text-slate-600">
               Hiển thị{' '}
               <span className="font-medium text-slate-900 tabular-nums">
                 {products.length}
               </span>{' '}
-              sản phẩm tiêu biểu trong tổng số{' '}
-              <span className="tabular-nums">{allProductsCount}</span> mẫu demo
-              tại quầy.
+              mặt hàng trong tổng số{' '}
+              <span className="tabular-nums">{allProductsCount}</span> sản phẩm.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={inStockOnly}
-                onChange={(e) => onInStockChange(e.target.checked)}
-                className="w-4 h-4 rounded border-slate-300 text-blue-700 focus:ring-blue-700"
-              />
-              <span>Chỉ hiện còn hàng</span>
+          <div className="flex items-center gap-2">
+            <label htmlFor="catalog-sort" className="text-sm text-slate-500">
+              Sắp xếp:
             </label>
-
-            <div className="flex items-center gap-2">
-              <label htmlFor="catalog-sort" className="text-sm text-slate-500">
-                Sắp xếp:
-              </label>
-              <select
-                id="catalog-sort"
-                value={sortBy}
-                onChange={(e) => onSortChange(e.target.value as SortOption)}
-                className="px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-800 focus:outline-2 focus:outline-blue-700 cursor-pointer"
-              >
-                <option value="popular">Bán chạy nhất</option>
-                <option value="price-asc">Giá thấp đến cao</option>
-                <option value="price-desc">Giá cao đến thấp</option>
-              </select>
-            </div>
+            <select
+              id="catalog-sort"
+              value={sortBy}
+              onChange={(e) => onSortChange(e.target.value as SortOption)}
+              className="px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-800 focus:outline-2 focus:outline-blue-700 cursor-pointer"
+            >
+              <option value="popular">Bán chạy nhất</option>
+              <option value="price-asc">Giá thấp đến cao</option>
+              <option value="price-desc">Giá cao đến thấp</option>
+            </select>
           </div>
         </div>
+
+        {catalogNotice && (
+          <div
+            role="status"
+            className="mt-4 px-4 py-3 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg"
+          >
+            {catalogNotice}
+          </div>
+        )}
 
         <div className="mt-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div
@@ -150,7 +146,16 @@ export function CatalogSection({
           </div>
         </div>
 
-        {products.length === 0 ? (
+        {isLoadingCatalog ? (
+          <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <div
+                key={idx}
+                className="h-80 bg-white border border-slate-200 rounded-xl animate-pulse"
+              />
+            ))}
+          </div>
+        ) : products.length === 0 ? (
           <div className="mt-10 py-14 px-6 text-center bg-white border border-slate-200 rounded-xl">
             <p className="font-display text-lg font-semibold text-slate-900">
               Không tìm thấy mặt hàng phù hợp

@@ -23,6 +23,25 @@ export interface VietQrParams {
   accountNumber: string;
   amount: number;
   orderId: string;
+  accountName?: string;
+}
+
+export function buildVietQrImageUrl({
+  bankBin = '970441',
+  accountNumber,
+  amount,
+  orderId,
+  accountName = 'Nguyễn Thu Hương',
+}: VietQrParams): string {
+  const roundedAmount = Math.max(0, Math.round(amount));
+  const cleanAccount = accountNumber.trim();
+  const cleanOrderId = orderId.trim();
+  const params = new URLSearchParams({
+    amount: String(roundedAmount),
+    addInfo: cleanOrderId,
+    accountName: accountName.trim(),
+  });
+  return `https://img.vietqr.io/image/${bankBin}-${cleanAccount}-compact2.png?${params.toString()}`;
 }
 
 export function buildVietQrPayload({

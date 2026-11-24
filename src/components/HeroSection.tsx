@@ -20,7 +20,7 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
                 Văn phòng phẩm, đồ học sinh &amp; tạp hóa gọn trong một lượt chọn
               </h1>
               <p className="mt-4 text-base text-slate-600 leading-relaxed max-w-[54ch]">
-                Hơn 1.280 mặt hàng thiết yếu từ bút vở, dụng cụ học tập, đồ chơi an toàn đến sữa bánh dùng ngay. Chọn trực tiếp trên trang chủ và đặt giao buổi tối từ 19:00 – 22:00 hằng ngày.
+                Shop hiện tại vẫn chưa tìm thuê được mặt bằng, bố mẹ đặt đơn bút, vở, đồ dùng cho học tập cho các con, shop sẽ giao buổi tối từ 19:00 – 22:00 hằng ngày.
               </p>
             </div>
 
@@ -57,10 +57,10 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
         <div className="mt-10 grid grid-cols-2 lg:grid-cols-4 border border-slate-200 rounded-xl bg-slate-50/70 divide-y lg:divide-y-0 lg:divide-x divide-slate-200">
           <div className="p-4 sm:p-5">
             <p className="font-mono text-xl sm:text-2xl font-medium text-slate-900 tabular-nums">
-              1.280+
+              Bán lẻ & sỉ
             </p>
             <p className="mt-1 text-xs sm:text-sm text-slate-600">
-              Mặt hàng sẵn tại kho
+              Nhiều mặt hàng sẵn tại kho
             </p>
           </div>
           <div className="p-4 sm:p-5 border-l border-slate-200 lg:border-l-0">
@@ -81,10 +81,10 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
           </div>
           <div className="p-4 sm:p-5 border-l border-slate-200 lg:border-l-0">
             <p className="font-mono text-xl sm:text-2xl font-medium text-slate-900">
-              Miễn phí ship
+              Giao tận nơi
             </p>
             <p className="mt-1 text-xs sm:text-sm text-slate-600">
-              Chiến Sĩ Bộ Công An, Green Star, An Bình
+              Chung cư Chiến Sĩ Bộ Công An, Green Star, An Bình
             </p>
           </div>
         </div>
