@@ -77,7 +77,7 @@ export interface CartSummary {
 
 export function calculateCartSummary(
   items: CartItem[],
-  deliveryMethod: DeliveryMethod,
+  _deliveryMethod: DeliveryMethod,
 ): CartSummary {
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
   const subtotal = items.reduce(
@@ -85,45 +85,27 @@ export function calculateCartSummary(
     0,
   );
 
-  const qualifiesFreeShip =
-    deliveryMethod === 'pickup' || subtotal === 0 || subtotal >= FREE_SHIP_THRESHOLD;
-  const shippingFee = qualifiesFreeShip ? 0 : STANDARD_SHIPPING_FEE;
-  const total = subtotal + shippingFee;
-  const amountToFreeShip =
-    deliveryMethod === 'pickup'
-      ? 0
-      : Math.max(0, FREE_SHIP_THRESHOLD - subtotal);
-  const freeShipProgress =
-    deliveryMethod === 'pickup'
-      ? 100
-      : Math.min(100, Math.round((subtotal / FREE_SHIP_THRESHOLD) * 100));
-
   return {
     itemCount,
     subtotal,
-    shippingFee,
-    total,
-    amountToFreeShip,
-    freeShipProgress,
+    shippingFee: 0,
+    total: subtotal,
+    amountToFreeShip: 0,
+    freeShipProgress: 100,
   };
 }
 
 export function validateCheckoutForm(form: CheckoutFormData): CheckoutErrors {
   const errors: CheckoutErrors = {};
-  const trimmedName = form.customerName.trim();
   const cleanPhone = form.phone.replace(/[\s.-]/g, '');
   const trimmedAddress = form.address.trim();
-
-  if (trimmedName.length < 2) {
-    errors.customerName = 'Vui lòng nhập họ và tên người nhận (từ 2 ký tự).';
-  }
 
   if (!/^0\d{9,10}$/.test(cleanPhone)) {
     errors.phone = 'Số điện thoại cần bắt đầu bằng 0 và gồm 10–11 chữ số.';
   }
 
-  if (form.deliveryMethod === 'delivery' && trimmedAddress.length < 6) {
-    errors.address = 'Vui lòng nhập địa chỉ giao hàng cụ thể (số nhà, tên đường).';
+  if (form.deliveryMethod === 'delivery' && trimmedAddress.length < 4) {
+    errors.address = 'Vui lòng nhập địa chỉ giao hàng (tòa nhà, số căn hộ hoặc tên đường).';
   }
 
   return errors;

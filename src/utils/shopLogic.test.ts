@@ -4,11 +4,10 @@ import {
   calculateCartSummary,
   filterAndSortProducts,
   formatVnd,
-  FREE_SHIP_THRESHOLD,
   normalizeVietnameseText,
-  STANDARD_SHIPPING_FEE,
   validateCheckoutForm,
 } from './shopLogic';
+import { buildVietQrPayload } from './vietqr';
 import type { CartItem, Product } from '../types/shop';
 
 const sampleProducts: Product[] = [
@@ -83,7 +82,7 @@ test('filterAndSortProducts filters by category, stock, and Vietnamese query', (
   );
 });
 
-test('calculateCartSummary computes free shipping threshold accurately', () => {
+test('calculateCartSummary computes subtotal and total accurately', () => {
   const item: CartItem = {
     productId: 'p3',
     sku: 'DC-003',
@@ -92,45 +91,41 @@ test('calculateCartSummary computes free shipping threshold accurately', () => {
     unit: 'Bộ',
     variant: '48 chi tiết',
     unitPrice: 95000,
-    quantity: 1,
+    quantity: 2,
     image: '/img3.jpg',
   };
 
-  const underThreshold = calculateCartSummary([item], 'delivery');
-  assert.equal(underThreshold.subtotal, 95000);
-  assert.equal(underThreshold.shippingFee, STANDARD_SHIPPING_FEE);
-  assert.equal(underThreshold.amountToFreeShip, FREE_SHIP_THRESHOLD - 95000);
-  assert.equal(underThreshold.total, 95000 + STANDARD_SHIPPING_FEE);
-
-  const overThreshold = calculateCartSummary(
-    [{ ...item, quantity: 2 }],
-    'delivery',
-  );
-  assert.equal(overThreshold.subtotal, 190000);
-  assert.equal(overThreshold.shippingFee, 0);
-  assert.equal(overThreshold.amountToFreeShip, 0);
-  assert.equal(overThreshold.total, 190000);
-
-  const pickup = calculateCartSummary([item], 'pickup');
-  assert.equal(pickup.shippingFee, 0);
-  assert.equal(pickup.total, 95000);
+  const summary = calculateCartSummary([item], 'delivery');
+  assert.equal(summary.subtotal, 190000);
+  assert.equal(summary.shippingFee, 0);
+  assert.equal(summary.total, 190000);
 });
 
-test('validateCheckoutForm rejects missing fields and invalid phones', () => {
+test('validateCheckoutForm allows optional customerName and checks phone and address', () => {
   const invalid = validateCheckoutForm({
-    customerName: 'A',
+    customerName: '',
     phone: '12345',
     address: '12',
     note: '',
     deliveryMethod: 'delivery',
     paymentMethod: 'cod',
   });
-  assert.ok(invalid.customerName);
+  assert.equal(invalid.customerName, undefined);
   assert.ok(invalid.phone);
   assert.ok(invalid.address);
 
+  const validWithoutName = validateCheckoutForm({
+    customerName: '',
+    phone: '0916319452',
+    address: 'CT2.1111 Green Star',
+    note: '',
+    deliveryMethod: 'delivery',
+    paymentMethod: 'transfer',
+  });
+  assert.deepEqual(validWithoutName, {});
+
   const validPickup = validateCheckoutForm({
-    customerName: 'Minh Anh',
+    customerName: '',
     phone: '0912345678',
     address: '',
     note: '',
@@ -138,6 +133,19 @@ test('validateCheckoutForm rejects missing fields and invalid phones', () => {
     paymentMethod: 'transfer',
   });
   assert.deepEqual(validPickup, {});
+});
+
+test('buildVietQrPayload encodes VIB account, exact amount, and order ID with CRC', () => {
+  const payload = buildVietQrPayload({
+    accountNumber: '916219452',
+    amount: 162000,
+    orderId: 'DH-2015-408',
+  });
+  assert.ok(payload.includes('970441'));
+  assert.ok(payload.includes('916219452'));
+  assert.ok(payload.includes('5406162000'));
+  assert.ok(payload.includes('DH-2015-408'));
+  assert.match(payload, /6304[0-9A-F]{4}$/);
 });
 
 test('formatVnd formats Vietnamese dong cleanly', () => {

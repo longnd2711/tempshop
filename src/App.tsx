@@ -186,12 +186,18 @@ export default function App() {
     setInStockOnly(false);
   };
 
+  const handleSelectNavCategory = (category: CategoryId) => {
+    setSelectedCategory(category);
+    setSearchQuery('');
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       <Header
         cartCount={cartSummary.itemCount}
         cartSubtotal={cartSummary.subtotal}
         onOpenCart={() => setIsCartOpen(true)}
+        onSelectNavCategory={handleSelectNavCategory}
       />
 
       <main className="flex-1">
@@ -223,7 +229,7 @@ export default function App() {
         />
       </main>
 
-      <Footer />
+      <Footer onSelectNavCategory={handleSelectNavCategory} />
 
       {cartSummary.itemCount > 0 && !isCartOpen && (
         <div className="md:hidden fixed bottom-3 inset-x-4 z-30">

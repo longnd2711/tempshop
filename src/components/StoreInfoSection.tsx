@@ -16,41 +16,41 @@ export function StoreInfoSection({
       <div className="max-w-[1200px] mx-auto px-4 sm:px-6">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           <div className="lg:col-span-7">
-            <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
-              Đặt hàng rõ ràng, nhận tại nhà hoặc ghé lấy ngay
+            <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 [text-wrap:balance]">
+              Giao hàng Chung cư Chiến Sĩ Bộ Công An, Green Star, An Bình
             </h2>
-            <p className="mt-2 text-sm sm:text-base text-slate-600 max-w-[60ch]">
-              Cửa hàng phục vụ khách khu dân cư và trường học lân cận. Mọi đơn đặt trực tuyến được nhân viên kiểm đếm trực tiếp từ kệ hàng và xác nhận qua điện thoại trước khi giao.
+            <p className="mt-2 text-sm sm:text-base text-slate-600 max-w-[62ch]">
+              Cửa hàng tạm thời chỉ nhận giao khu dân cư và trường học lân cận. Khách có yêu cầu khác vui lòng liên hệ zalo 0916 319 452 hoặc fb: thuhuong.nguyen.180
             </p>
 
             <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="p-5 bg-white border border-slate-200 rounded-xl">
                 <div className="flex items-center gap-2.5 text-slate-900 font-semibold text-sm">
                   <Truck className="w-4 h-4 text-blue-700 shrink-0" aria-hidden="true" />
-                  <span>Giao nhanh trong 45 phút</span>
+                  <span>Giao trong ngày 19:00-22:00</span>
                 </div>
                 <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                  Phí giao đồng giá 15.000₫ nội khu 4km. Miễn phí hoàn toàn cho đơn hàng từ 150.000₫ trở lên.
+                  Miễn phí ship Chung cư Chiến Sĩ Bộ Công An, Green Star, An Bình. Giao điểm khác hoặc giờ hành chính vui lòng liên hệ shop.
                 </p>
               </div>
 
               <div className="p-5 bg-white border border-slate-200 rounded-xl">
                 <div className="flex items-center gap-2.5 text-slate-900 font-semibold text-sm">
                   <Clock className="w-4 h-4 text-blue-700 shrink-0" aria-hidden="true" />
-                  <span>Soạn sẵn nhận tại quầy</span>
+                  <span>Soạn sẵn nhận tại CT2.1111</span>
                 </div>
                 <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                  Đặt trước trên web để nhân viên đóng gói sẵn. Ghé lấy sau 15 phút mà không cần chờ đợi.
+                  Đặt trước để shop đóng gói sẵn. Shop sẽ nhắn ngay khi sẵn chuẩn bị xong.
                 </p>
               </div>
 
               <div className="p-5 bg-white border border-slate-200 rounded-xl sm:col-span-2">
                 <div className="flex items-center gap-2.5 text-slate-900 font-semibold text-sm">
                   <MapPin className="w-4 h-4 text-blue-700 shrink-0" aria-hidden="true" />
-                  <span>Địa chỉ cửa hàng: 118 Đường Số 7, Phường Bình Trị Đông, TP.HCM</span>
+                  <span>Điểm nhận hàng trực tiếp: CT2.1111 · Zalo 0916 319 452</span>
                 </div>
                 <p className="mt-1.5 text-sm text-slate-600">
-                  Mở cửa 07:00 – 21:30 tất cả các ngày trong tuần · Hỗ trợ thanh toán tiền mặt khi nhận hàng (COD) hoặc chuyển khoản ngân hàng.
+                  Giao hàng buổi tối 19:00 – 22:00 hằng ngày · Hỗ trợ chuyển khoản VIB hoặc thanh toán tiền mặt khi nhận hàng (COD).
                 </p>
               </div>
             </div>
@@ -78,7 +78,9 @@ export function StoreInfoSection({
                   <div className="flex justify-between gap-3">
                     <dt className="text-slate-500">Người nhận</dt>
                     <dd className="font-medium text-slate-900 text-right">
-                      {lastOrder.customerName} · {lastOrder.phone}
+                      {lastOrder.customerName
+                        ? `${lastOrder.customerName} · ${lastOrder.phone}`
+                        : lastOrder.phone}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-3">
@@ -86,7 +88,7 @@ export function StoreInfoSection({
                     <dd className="font-medium text-slate-900 text-right">
                       {lastOrder.deliveryMethod === 'delivery'
                         ? 'Giao tận nơi'
-                        : 'Nhận tại quầy'}
+                        : 'Nhận tại CT2.1111'}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-3">
@@ -106,7 +108,7 @@ export function StoreInfoSection({
             ) : (
               <div className="p-6 bg-white border border-slate-200 rounded-xl">
                 <h3 className="font-display text-lg font-bold text-slate-900">
-                  Quy trình đặt hàng nhanh 3 bước
+                  Đặt hàng nhanh
                 </h3>
                 <ol className="mt-4 space-y-3 text-sm text-slate-600">
                   <li className="flex gap-3">
@@ -114,7 +116,7 @@ export function StoreInfoSection({
                       01.
                     </span>
                     <span>
-                      Chọn sản phẩm lẻ hoặc combo ngay trên trang chủ bằng nút Thêm nhanh.
+                      Chọn sản phẩm lẻ hoặc combo bằng nút Thêm nhanh.
                     </span>
                   </li>
                   <li className="flex gap-3">
@@ -122,7 +124,7 @@ export function StoreInfoSection({
                       02.
                     </span>
                     <span>
-                      Mở giỏ hàng, kiểm tra số lượng và điền họ tên, số điện thoại, địa chỉ nhận.
+                      Mở giỏ hàng, kiểm tra số lượng và điền Tên, số điện thoại, địa chỉ nhận.
                     </span>
                   </li>
                   <li className="flex gap-3">
@@ -130,7 +132,7 @@ export function StoreInfoSection({
                       03.
                     </span>
                     <span>
-                      Xác nhận đơn — nhận mã đơn hàng tức thì, thanh toán COD khi nhận hàng.
+                      Xác nhận đơn, chuyển khoản hoặc thanh toán khi nhận hàng.
                     </span>
                   </li>
                 </ol>

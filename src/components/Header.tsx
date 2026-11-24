@@ -1,16 +1,19 @@
 import { ShoppingBag } from 'lucide-react';
+import type { CategoryId } from '../types/shop';
 import { formatVnd } from '../utils/shopLogic';
 
 interface HeaderProps {
   cartCount: number;
   cartSubtotal: number;
   onOpenCart: () => void;
+  onSelectNavCategory: (category: CategoryId) => void;
 }
 
 export function Header({
   cartCount,
   cartSubtotal,
   onOpenCart,
+  onSelectNavCategory,
 }: HeaderProps) {
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-slate-200">
@@ -19,24 +22,26 @@ export function Header({
           href="#hero"
           className="font-display text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-700 rounded-sm"
         >
-          Tiệm An Nhiên
+          Văn phòng phẩm Hương Long
         </a>
 
         <nav
           aria-label="Điều hướng chính"
-          className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600"
+          className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600"
         >
           <a
-            href="#hero"
+            href="#catalog"
+            onClick={() => onSelectNavCategory('stationery')}
             className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-700 rounded-sm"
           >
-            Giới thiệu
+            Văn phòng phẩm
           </a>
           <a
             href="#catalog"
+            onClick={() => onSelectNavCategory('school')}
             className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-700 rounded-sm"
           >
-            Sản phẩm
+            Đồ dùng học sinh
           </a>
           <a
             href="#bundles"
@@ -45,10 +50,11 @@ export function Header({
             Combo nhanh
           </a>
           <a
-            href="#store-info"
+            href="#catalog"
+            onClick={() => onSelectNavCategory('toys')}
             className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-700 rounded-sm"
           >
-            Giao hàng
+            Đồ chơi &amp; Quà tặng
           </a>
         </nav>
 

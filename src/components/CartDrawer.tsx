@@ -11,10 +11,10 @@ import type {
 import {
   calculateCartSummary,
   formatVnd,
-  FREE_SHIP_THRESHOLD,
   generateOrderCode,
   validateCheckoutForm,
 } from '../utils/shopLogic';
+import { BankTransferQR } from './BankTransferQR';
 import { SafeImage } from './SafeImage';
 
 interface CartDrawerProps {
@@ -48,6 +48,9 @@ export function CartDrawer({
   const [form, setForm] = useState<CheckoutFormData>(INITIAL_FORM);
   const [errors, setErrors] = useState<CheckoutErrors>({});
   const [confirmedOrder, setConfirmedOrder] = useState<OrderRecord | null>(null);
+  const [draftOrderCode, setDraftOrderCode] = useState<string>(() =>
+    generateOrderCode(),
+  );
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -92,7 +95,7 @@ export function CartDrawer({
     }
 
     const order: OrderRecord = {
-      orderCode: generateOrderCode(),
+      orderCode: draftOrderCode,
       createdAt: new Date().toLocaleTimeString('vi-VN', {
         hour: '2-digit',
         minute: '2-digit',
@@ -101,14 +104,14 @@ export function CartDrawer({
       phone: form.phone.trim(),
       address:
         form.deliveryMethod === 'pickup'
-          ? 'Nhận trực tiếp tại 118 Đường Số 7'
+          ? 'Nhận tại CT2.1111'
           : form.address.trim(),
       note: form.note.trim(),
       deliveryMethod: form.deliveryMethod,
       paymentMethod: form.paymentMethod,
       items: [...items],
       subtotal: summary.subtotal,
-      shippingFee: summary.shippingFee,
+      shippingFee: 0,
       total: summary.total,
     };
 
@@ -117,6 +120,7 @@ export function CartDrawer({
     onClearCart();
     setForm(INITIAL_FORM);
     setErrors({});
+    setDraftOrderCode(generateOrderCode());
   };
 
   const handleStartNewShopping = () => {
@@ -173,23 +177,32 @@ export function CartDrawer({
                       Đặt hàng thành công · Mã {confirmedOrder.orderCode}
                     </p>
                     <p className="mt-1 text-sm text-emerald-800">
-                      Cửa hàng đã tiếp nhận lúc {confirmedOrder.createdAt} và đang soạn hàng từ kệ để giao trong khoảng 45 phút.
+                      Shop đã tiếp nhận lúc {confirmedOrder.createdAt} và sẽ giao trong khung giờ 19:00 – 22:00 hoặc nhắn báo ngay khi soạn xong tại CT2.1111.
                     </p>
                   </div>
                 </div>
               </div>
+
+              {confirmedOrder.paymentMethod === 'transfer' && (
+                <BankTransferQR
+                  amount={confirmedOrder.total}
+                  orderId={confirmedOrder.orderCode}
+                />
+              )}
 
               <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-sm">
                 <h3 className="font-display font-semibold text-slate-900">
                   Thông tin nhận hàng
                 </h3>
                 <div className="space-y-1.5 text-slate-600">
-                  <p>
-                    Người nhận:{' '}
-                    <span className="font-medium text-slate-900">
-                      {confirmedOrder.customerName}
-                    </span>
-                  </p>
+                  {confirmedOrder.customerName && (
+                    <p>
+                      Tên người nhận:{' '}
+                      <span className="font-medium text-slate-900">
+                        {confirmedOrder.customerName}
+                      </span>
+                    </p>
+                  )}
                   <p>
                     Điện thoại:{' '}
                     <span className="font-mono text-slate-900">
@@ -205,7 +218,7 @@ export function CartDrawer({
                     <span className="text-slate-900">
                       {confirmedOrder.paymentMethod === 'cod'
                         ? 'Tiền mặt khi nhận hàng (COD)'
-                        : 'Chuyển khoản ngân hàng'}
+                        : 'Chuyển khoản VIB (916219452)'}
                     </span>
                   </p>
                   {confirmedOrder.note && (
@@ -239,22 +252,8 @@ export function CartDrawer({
                     </li>
                   ))}
                 </ul>
-                <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 space-y-1.5 text-sm">
-                  <div className="flex justify-between text-slate-600">
-                    <span>Tạm tính</span>
-                    <span className="tabular-nums">
-                      {formatVnd(confirmedOrder.subtotal)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>Phí giao hàng</span>
-                    <span className="tabular-nums">
-                      {confirmedOrder.shippingFee === 0
-                        ? 'Miễn phí'
-                        : formatVnd(confirmedOrder.shippingFee)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between font-bold text-slate-900 pt-1.5 border-t border-slate-200">
+                <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 text-sm">
+                  <div className="flex justify-between font-bold text-slate-900">
                     <span>Tổng cộng</span>
                     <span className="text-blue-700 tabular-nums">
                       {formatVnd(confirmedOrder.total)}
@@ -293,27 +292,6 @@ export function CartDrawer({
             </div>
           ) : (
             <div className="space-y-6">
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
-                <div className="flex items-center justify-between text-xs font-medium text-slate-700 mb-2">
-                  <span>
-                    {form.deliveryMethod === 'pickup'
-                      ? 'Nhận tại quầy · Miễn phí vận chuyển'
-                      : summary.amountToFreeShip === 0
-                        ? 'Đơn đã đạt mức miễn phí giao hàng'
-                        : `Mua thêm ${formatVnd(summary.amountToFreeShip)} để được miễn phí giao`}
-                  </span>
-                  <span className="font-mono tabular-nums text-slate-500">
-                    {formatVnd(FREE_SHIP_THRESHOLD)}
-                  </span>
-                </div>
-                <div className="h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-700 transition-all duration-200"
-                    style={{ width: `${summary.freeShipProgress}%` }}
-                  />
-                </div>
-              </div>
-
               <ul className="divide-y divide-slate-200 border-t border-b border-slate-200">
                 {items.map((item) => (
                   <li
@@ -401,8 +379,8 @@ export function CartDrawer({
                   <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-lg">
                     {(
                       [
-                        { id: 'delivery', label: 'Giao tận nơi (45p)' },
-                        { id: 'pickup', label: 'Nhận tại quầy' },
+                        { id: 'delivery', label: 'Giao tận nơi' },
+                        { id: 'pickup', label: 'Nhận tại CT2.1111' },
                       ] as { id: DeliveryMethod; label: string }[]
                     ).map((option) => (
                       <button
@@ -426,24 +404,18 @@ export function CartDrawer({
                     htmlFor="checkout-name"
                     className="block text-xs font-medium text-slate-700 mb-1"
                   >
-                    Họ và tên người nhận *
+                    Tên người nhận (không bắt buộc)
                   </label>
                   <input
                     id="checkout-name"
                     type="text"
-                    required
                     value={form.customerName}
                     onChange={(e) =>
                       handleFieldChange('customerName', e.target.value)
                     }
-                    placeholder="Ví dụ: Nguyễn Minh Anh"
+                    placeholder="Không bắt buộc — ví dụ: Chị Hương"
                     className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-700"
                   />
-                  {errors.customerName && (
-                    <p role="alert" className="mt-1 text-xs text-red-600">
-                      {errors.customerName}
-                    </p>
-                  )}
                 </div>
 
                 <div>
@@ -459,7 +431,7 @@ export function CartDrawer({
                     required
                     value={form.phone}
                     onChange={(e) => handleFieldChange('phone', e.target.value)}
-                    placeholder="0912345678"
+                    placeholder="0916319452"
                     className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-700"
                   />
                   {errors.phone && (
@@ -485,7 +457,7 @@ export function CartDrawer({
                       onChange={(e) =>
                         handleFieldChange('address', e.target.value)
                       }
-                      placeholder="Số nhà, tên đường, phường..."
+                      placeholder="Ví dụ: Phòng 1205 tòa CT2 Green Star..."
                       className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-700"
                     />
                     {errors.address && (
@@ -523,6 +495,13 @@ export function CartDrawer({
                   </div>
                 </div>
 
+                {form.paymentMethod === 'transfer' && (
+                  <BankTransferQR
+                    amount={summary.total}
+                    orderId={draftOrderCode}
+                  />
+                )}
+
                 <div>
                   <label
                     htmlFor="checkout-note"
@@ -535,7 +514,7 @@ export function CartDrawer({
                     type="text"
                     value={form.note}
                     onChange={(e) => handleFieldChange('note', e.target.value)}
-                    placeholder="Ví dụ: Giao giờ trưa, gói quà giúp..."
+                    placeholder="Ví dụ: Giao sau 20h, gói quà giúp..."
                     className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-700"
                   />
                 </div>
@@ -546,25 +525,11 @@ export function CartDrawer({
 
         {!confirmedOrder && items.length > 0 && (
           <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 space-y-3">
-            <div className="space-y-1 text-sm">
-              <div className="flex justify-between text-slate-600">
-                <span>Tạm tính</span>
-                <span className="tabular-nums">{formatVnd(summary.subtotal)}</span>
-              </div>
-              <div className="flex justify-between text-slate-600">
-                <span>Phí giao hàng</span>
-                <span className="tabular-nums">
-                  {summary.shippingFee === 0
-                    ? 'Miễn phí'
-                    : formatVnd(summary.shippingFee)}
-                </span>
-              </div>
-              <div className="flex justify-between text-base font-bold text-slate-900 pt-1 border-t border-slate-200">
-                <span>Tổng thanh toán</span>
-                <span className="text-blue-700 tabular-nums">
-                  {formatVnd(summary.total)}
-                </span>
-              </div>
+            <div className="flex justify-between text-base font-bold text-slate-900">
+              <span>Tổng thanh toán</span>
+              <span className="text-blue-700 tabular-nums">
+                {formatVnd(summary.total)}
+              </span>
             </div>
 
             <button

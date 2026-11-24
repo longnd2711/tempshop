@@ -14,13 +14,13 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
           <div className="lg:col-span-6 flex flex-col justify-between py-1">
             <div>
               <p className="text-xs font-medium tracking-wide text-slate-500 mb-3">
-                Cửa hàng khu dân cư · Mở cửa 07:00 – 21:30 hằng ngày
+                Giao hàng tận nơi · 19:00 - 22:00 hàng ngày.
               </p>
               <h1 className="font-display text-3xl sm:text-4xl lg:text-[42px] font-bold tracking-tight text-slate-900 leading-[1.15] [text-wrap:balance]">
                 Văn phòng phẩm, đồ học sinh &amp; tạp hóa gọn trong một lượt chọn
               </h1>
               <p className="mt-4 text-base text-slate-600 leading-relaxed max-w-[54ch]">
-                Hơn 1.280 mặt hàng thiết yếu từ bút vở, dụng cụ học tập, đồ chơi an toàn đến sữa bánh dùng ngay. Chọn trực tiếp trên trang chủ và đặt giao tận cửa trong 45 phút.
+                Hơn 1.280 mặt hàng thiết yếu từ bút vở, dụng cụ học tập, đồ chơi an toàn đến sữa bánh dùng ngay. Chọn trực tiếp trên trang chủ và đặt giao buổi tối từ 19:00 – 22:00 hằng ngày.
               </p>
             </div>
 
@@ -46,8 +46,8 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
             <div className="relative h-full min-h-[240px] sm:min-h-[300px] lg:min-h-[340px] rounded-xl overflow-hidden bg-slate-100 border border-slate-200">
               <SafeImage
                 src={HERO_IMAGE}
-                alt="Bàn trưng bày văn phòng phẩm, vở học sinh, đồ chơi gỗ và đồ ăn nhẹ tại Tiệm An Nhiên"
-                fallbackLabel="Tiệm An Nhiên · Văn phòng phẩm & Tạp hóa"
+                alt="Bàn trưng bày văn phòng phẩm, vở học sinh, đồ chơi gỗ và đồ ăn nhẹ tại Văn phòng phẩm Hương Long"
+                fallbackLabel="Văn phòng phẩm Hương Long"
                 className="w-full h-full lg:h-full object-cover object-center"
               />
             </div>
@@ -60,7 +60,7 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
               1.280+
             </p>
             <p className="mt-1 text-xs sm:text-sm text-slate-600">
-              Mặt hàng sẵn tại quầy
+              Mặt hàng sẵn tại kho
             </p>
           </div>
           <div className="p-4 sm:p-5 border-l border-slate-200 lg:border-l-0">
@@ -73,18 +73,18 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
           </div>
           <div className="p-4 sm:p-5">
             <p className="font-mono text-xl sm:text-2xl font-medium text-slate-900 tabular-nums">
-              45 phút
+              19:00 – 22:00
             </p>
             <p className="mt-1 text-xs sm:text-sm text-slate-600">
-              Giao nhanh nội khu bán kính 4km
+              Giao hàng trong ngày buổi tối
             </p>
           </div>
           <div className="p-4 sm:p-5 border-l border-slate-200 lg:border-l-0">
-            <p className="font-mono text-xl sm:text-2xl font-medium text-slate-900 tabular-nums">
-              150.000₫
+            <p className="font-mono text-xl sm:text-2xl font-medium text-slate-900">
+              Miễn phí ship
             </p>
             <p className="mt-1 text-xs sm:text-sm text-slate-600">
-              Miễn phí vận chuyển cho đơn từ mức này
+              Chiến Sĩ Bộ Công An, Green Star, An Bình
             </p>
           </div>
         </div>
