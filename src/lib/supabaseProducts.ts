@@ -1,13 +1,13 @@
-import { createClient } from '@supabase/supabase-js';
-import { BUNDLE_PACKS, PRODUCTS } from '../data/catalog';
-import type { BundleItemEntry, BundlePack, Product } from '../types/shop';
+import { getSupabaseClient } from './supabaseClient';
+import { PRODUCTS } from '../data/catalog';
+import type { CategoryNode, Product } from '../types/shop';
 
-export const CATALOG_CACHE_STORAGE_KEY = 'vpp_huong_long_catalog_cache_v2';
+export const CATALOG_CACHE_STORAGE_KEY = 'vpp_huong_long_catalog_cache_v3';
 export const BACKGROUND_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 
 export interface CatalogCachePayload {
   products: Product[];
-  combos: BundlePack[];
+  categories?: CategoryNode[];
   syncedAt: number;
   source: 'supabase' | 'demo';
 }
@@ -103,11 +103,26 @@ function parseVariants(rawVariants: unknown): string[] {
   return ['Tiêu chuẩn'];
 }
 
+export function mapSupabaseRowToCategory(
+  row: Record<string, unknown>,
+  index: number,
+): CategoryNode {
+  return {
+    id: String(row.id ?? `cat-${index}`),
+    name: String(row.name ?? 'Danh mục').trim(),
+    slug: String(row.slug ?? row.id ?? `cat-${index}`).trim(),
+    parentId: typeof row.parent_id === 'string' && row.parent_id ? row.parent_id : null,
+    sortOrder: Number.isFinite(Number(row.sort_order)) ? Number(row.sort_order) : index,
+    isActive: row.is_active !== false,
+  };
+}
+
 export function mapSupabaseRowToProduct(
   row: Record<string, unknown>,
   index: number,
 ): Product {
   const categoryText =
+    parseOptionalString(row.category_name) ??
     parseOptionalString(row.category) ??
     parseOptionalString(row.category_label) ??
     'Văn phòng phẩm';
@@ -131,7 +146,7 @@ export function mapSupabaseRowToProduct(
   const brand = parseOptionalString(row.brand);
   const barcode = parseOptionalString(row.barcode);
   const parsedImages = parseImageUrls(
-    row.image_url ?? row.img_url ?? row.image ?? '',
+    row.image_urls ?? row.image_url ?? row.img_url ?? row.image ?? '',
   );
 
   const descriptionText =
@@ -147,6 +162,11 @@ export function mapSupabaseRowToProduct(
     brand,
     category: categoryText,
     categoryLabel: parseOptionalString(row.category_label) ?? categoryText,
+    categoryId:
+      typeof row.category_id === 'string' && row.category_id
+        ? row.category_id
+        : null,
+    categorySlug: parseOptionalString(row.category_slug),
     price,
     costPrice,
     unit,
@@ -163,77 +183,6 @@ export function mapSupabaseRowToProduct(
     notes,
     featuredTag: parseOptionalString(row.featured_tag),
   };
-}
-
-export function mapSupabaseCombos(
-  comboRows: Record<string, unknown>[],
-  comboItemRows: Record<string, unknown>[],
-  products: Product[],
-): BundlePack[] {
-  const productById = new Map<string, Product>();
-  const productBySku = new Map<string, Product>();
-  for (const prod of products) {
-    productById.set(String(prod.id), prod);
-    productBySku.set(prod.sku.toUpperCase(), prod);
-  }
-
-  return comboRows
-    .filter((row) => row.is_active !== false)
-    .map((row, idx) => {
-      const id = String(row.id ?? row.combo_code ?? `combo-${idx + 1}`);
-      const comboCode =
-        parseOptionalString(row.combo_code) ?? `CB-${String(idx + 1).padStart(3, '0')}`;
-      const title =
-        parseOptionalString(row.name) ?? `Combo nhanh ${comboCode}`;
-      const notes = parseOptionalString(row.notes);
-      const discountAmount = normalizeVndPrice(row.discount_amount ?? 0);
-
-      const matchingItems = comboItemRows.filter(
-        (item) => String(item.combo_id) === id,
-      );
-
-      let originalPrice = 0;
-      const items: BundleItemEntry[] = matchingItems.map((itemRow) => {
-        const productId = String(itemRow.product_id ?? '');
-        const qtyNum = Number(itemRow.quantity ?? 1);
-        const quantity = Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum : 1;
-        const matchedProduct =
-          productById.get(productId) ?? productBySku.get(productId.toUpperCase());
-
-        if (matchedProduct) {
-          originalPrice += matchedProduct.price * quantity;
-        }
-
-        return {
-          productId,
-          quantity,
-          productName: matchedProduct?.name,
-          productPrice: matchedProduct?.price,
-          productUnit: matchedProduct?.unit,
-          productImage: matchedProduct?.image,
-          productSku: matchedProduct?.sku,
-        };
-      });
-
-      const bundlePrice = Math.max(0, originalPrice - discountAmount);
-      const parsedImages = parseImageUrls(row.image_url ?? row.img_url ?? '');
-
-      return {
-        id,
-        comboCode,
-        title,
-        subtitle:
-          notes ??
-          `Combo ${items.length} sản phẩm soạn sẵn tiện lợi theo đơn.`,
-        audience: `Mã ${comboCode}`,
-        items,
-        discountAmount,
-        originalPrice,
-        bundlePrice,
-        isActive: row.is_active !== false,
-        image: parsedImages[0] || undefined,
-      };
-    });
 }
 
 function getDefaultStorage(): StorageLike | null {
@@ -258,7 +207,7 @@ export function loadCachedCatalog(
     }
     return {
       products: parsed.products,
-      combos: Array.isArray(parsed.combos) ? parsed.combos : BUNDLE_PACKS,
+      categories: Array.isArray(parsed.categories) ? parsed.categories : undefined,
       syncedAt: typeof parsed.syncedAt === 'number' ? parsed.syncedAt : Date.now(),
       source: parsed.source === 'supabase' ? 'supabase' : 'demo',
     };
@@ -290,7 +239,7 @@ export function isCatalogCacheStale(
 
 export interface CatalogFetchResult {
   products: Product[];
-  combos: BundlePack[];
+  categories?: CategoryNode[];
   source: 'supabase' | 'demo';
   syncedAt: number;
   errorMessage?: string;
@@ -300,36 +249,33 @@ export async function fetchCatalogFromSupabase(): Promise<CatalogFetchResult> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
   const productsTable =
-    import.meta.env.VITE_SUPABASE_PRODUCTS_TABLE?.trim() || 'products';
-  const combosTable =
-    import.meta.env.VITE_SUPABASE_COMBOS_TABLE?.trim() || 'combos';
-  const comboItemsTable =
-    import.meta.env.VITE_SUPABASE_COMBO_ITEMS_TABLE?.trim() || 'combo_items';
+    import.meta.env.VITE_SUPABASE_PRODUCTS_TABLE?.trim() || 'public_products';
+  const categoriesTable =
+    import.meta.env.VITE_SUPABASE_CATEGORIES_TABLE?.trim() || 'categories';
 
   const now = Date.now();
 
   if (!supabaseUrl || !supabaseAnonKey) {
     return {
       products: PRODUCTS,
-      combos: BUNDLE_PACKS,
       source: 'demo',
       syncedAt: now,
     };
   }
 
   try {
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-    const [productsRes, combosRes, comboItemsRes] = await Promise.all([
+    const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
+    const [productsRes, categoriesRes] = await Promise.all([
       supabase.from(productsTable).select('*'),
-      supabase.from(combosTable).select('*').eq('is_active', true),
-      supabase.from(comboItemsTable).select('*'),
+      supabase
+        .from(categoriesTable)
+        .select('*')
+        .order('sort_order', { ascending: true }),
     ]);
 
     if (productsRes.error) {
       return {
         products: PRODUCTS,
-        combos: BUNDLE_PACKS,
         source: 'demo',
         syncedAt: now,
         errorMessage: `Không thể đồng bộ Supabase (${productsRes.error.message}). Đang dùng dữ liệu đã lưu.`,
@@ -337,14 +283,20 @@ export async function fetchCatalogFromSupabase(): Promise<CatalogFetchResult> {
     }
 
     const rawProductRows = productsRes.data ?? [];
+    const mappedCategories = !categoriesRes.error && Array.isArray(categoriesRes.data)
+      ? categoriesRes.data.map((row, idx) =>
+          mapSupabaseRowToCategory(row as Record<string, unknown>, idx),
+        )
+      : undefined;
+
     if (rawProductRows.length === 0) {
       return {
         products: PRODUCTS,
-        combos: BUNDLE_PACKS,
+        categories: mappedCategories,
         source: 'demo',
         syncedAt: now,
         errorMessage:
-          'Bảng products trên Supabase hiện chưa có dữ liệu (hoặc chưa bật quyền đọc public/anon). Đang hiển thị danh mục mẫu.',
+          `Bảng/View ${productsTable} trên Supabase hiện chưa có dữ liệu. Đang hiển thị danh mục mẫu.`,
       };
     }
 
@@ -352,18 +304,9 @@ export async function fetchCatalogFromSupabase(): Promise<CatalogFetchResult> {
       mapSupabaseRowToProduct(row as Record<string, unknown>, idx),
     );
 
-    let mappedCombos: BundlePack[] = [];
-    if (!combosRes.error && !comboItemsRes.error && combosRes.data) {
-      mappedCombos = mapSupabaseCombos(
-        combosRes.data as Record<string, unknown>[],
-        (comboItemsRes.data ?? []) as Record<string, unknown>[],
-        mappedProducts,
-      );
-    }
-
     return {
       products: mappedProducts,
-      combos: mappedCombos,
+      categories: mappedCategories,
       source: 'supabase',
       syncedAt: now,
     };
@@ -372,7 +315,6 @@ export async function fetchCatalogFromSupabase(): Promise<CatalogFetchResult> {
       err instanceof Error ? err.message : 'Lỗi kết nối Supabase';
     return {
       products: PRODUCTS,
-      combos: BUNDLE_PACKS,
       source: 'demo',
       syncedAt: now,
       errorMessage: `Không thể đồng bộ Supabase (${message}). Đang dùng dữ liệu đã lưu.`,

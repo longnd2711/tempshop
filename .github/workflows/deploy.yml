@@ -4,6 +4,15 @@ on:
   push:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: "Nơi deploy bản build"
+        required: true
+        default: "current_repo"
+        type: choice
+        options:
+          - current_repo
+          - public_shop
 
 permissions:
   contents: read
@@ -15,7 +24,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  build_and_deploy_current:
+    if: github.event_name == 'push' || inputs.deploy_target == 'current_repo'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build for current repo test
+        env:
+          VITE_BASE_PATH: "/${{ github.event.repository.name }}/"
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_PRODUCTS_TABLE: ${{ secrets.VITE_SUPABASE_PRODUCTS_TABLE || 'public_products' }}
+          VITE_SUPABASE_CATEGORIES_TABLE: ${{ secrets.VITE_SUPABASE_CATEGORIES_TABLE || 'categories' }}
+          VITE_SUPABASE_ORDERS_TABLE: ${{ secrets.VITE_SUPABASE_ORDERS_TABLE || 'orders' }}
+          VITE_SUPABASE_ORDER_ITEMS_TABLE: ${{ secrets.VITE_SUPABASE_ORDER_ITEMS_TABLE || 'order_items' }}
+        run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "./dist"
+
+      - name: Deploy to current repo GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  deploy_to_public_shop:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'public_shop'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,28 +80,23 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Build
+      - name: Build for https://longnd2711.github.io/shop/
         env:
+          VITE_BASE_PATH: "/shop/"
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_SUPABASE_PRODUCTS_TABLE: ${{ secrets.VITE_SUPABASE_PRODUCTS_TABLE }}
+          VITE_SUPABASE_PRODUCTS_TABLE: ${{ secrets.VITE_SUPABASE_PRODUCTS_TABLE || 'public_products' }}
+          VITE_SUPABASE_CATEGORIES_TABLE: ${{ secrets.VITE_SUPABASE_CATEGORIES_TABLE || 'categories' }}
+          VITE_SUPABASE_ORDERS_TABLE: ${{ secrets.VITE_SUPABASE_ORDERS_TABLE || 'orders' }}
+          VITE_SUPABASE_ORDER_ITEMS_TABLE: ${{ secrets.VITE_SUPABASE_ORDER_ITEMS_TABLE || 'order_items' }}
         run: npm run build
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Deploy dist to longnd2711/shop
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: "./dist"
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          personal_token: ${{ secrets.DEPLOY_PUBLIC_TOKEN }}
+          external_repository: longnd2711/shop
+          publish_branch: gh-pages
+          publish_dir: ./dist
+          force_orphan: true
+          commit_message: "chore: deploy production build from private repo"

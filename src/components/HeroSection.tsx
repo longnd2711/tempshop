@@ -17,7 +17,7 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
                 Giao hàng tận nơi · 19:00 - 22:00 hàng ngày.
               </p>
               <h1 className="font-display text-2xl sm:text-4xl lg:text-[42px] font-bold tracking-tight text-slate-900 leading-[1.18] [text-wrap:balance]">
-                Văn phòng phẩm, đồ học sinh &amp; tạp hóa gọn trong một lượt chọn
+                Giao hàng tận nơi Chung cư BCA, Green Star, An Bình
               </h1>
               <p className="mt-3 sm:mt-4 text-sm sm:text-base text-slate-600 leading-relaxed max-w-[54ch]">
                 Shop hiện tại vẫn chưa tìm thuê được mặt bằng, bố mẹ đặt đơn bút, vở, đồ dùng cho học tập cho các con, shop sẽ giao buổi tối từ 19:00 – 22:00 hằng ngày.
@@ -33,12 +33,6 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
                 <span>Chọn sản phẩm ngay</span>
                 <ArrowRight className="w-4 h-4 shrink-0" aria-hidden="true" />
               </button>
-              <a
-                href="#bundles"
-                className="inline-flex items-center justify-center min-h-[44px] px-4 py-2.5 text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700"
-              >
-                Xem combo soạn sẵn
-              </a>
             </div>
           </div>
 

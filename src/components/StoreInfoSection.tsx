@@ -116,7 +116,7 @@ export function StoreInfoSection({
                       01.
                     </span>
                     <span>
-                      Chọn sản phẩm lẻ hoặc combo bằng nút Thêm nhanh.
+                      Chọn sản phẩm bằng nút Thêm nhanh.
                     </span>
                   </li>
                   <li className="flex gap-3">

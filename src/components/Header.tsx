@@ -4,35 +4,30 @@ import type { CategoryId } from '../types/shop';
 import { formatVnd } from '../utils/shopLogic';
 
 interface HeaderProps {
+  categories: string[];
   cartCount: number;
   cartSubtotal: number;
+  isAuthenticated?: boolean;
   onOpenCart: () => void;
   onSelectNavCategory: (category: CategoryId) => void;
+  onNavigateShop: () => void;
+  onOpenAdminPortal?: () => void;
 }
 
-const MENU_ITEMS: Array<{
-  label: string;
-  href: string;
-  category?: string;
-}> = [
-  { label: 'Văn phòng phẩm', href: '#catalog', category: 'Văn phòng phẩm' },
-  { label: 'Đồ dùng học sinh', href: '#catalog', category: 'Đồ dùng học sinh' },
-  { label: 'Đồ chơi & Quà tặng', href: '#catalog', category: 'Đồ chơi & Quà tặng' },
-  { label: 'Combo nhanh', href: '#bundles' },
-];
-
 export function Header({
+  categories,
   cartCount,
   cartSubtotal,
+  isAuthenticated = false,
   onOpenCart,
   onSelectNavCategory,
+  onNavigateShop,
+  onOpenAdminPortal,
 }: HeaderProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const handleMenuItemClick = (item: (typeof MENU_ITEMS)[number]) => {
-    if (item.category) {
-      onSelectNavCategory(item.category);
-    }
+  const handleMenuItemClick = (category: string) => {
+    onSelectNavCategory(category);
     setIsMobileMenuOpen(false);
   };
 
@@ -41,7 +36,11 @@ export function Header({
       <div className="max-w-[1200px] mx-auto px-4 sm:px-6 h-14 md:h-16 flex items-center justify-between gap-4 md:gap-8">
         <a
           href="#hero"
-          onClick={() => setIsMobileMenuOpen(false)}
+          onClick={(e) => {
+            e.preventDefault();
+            setIsMobileMenuOpen(false);
+            onNavigateShop();
+          }}
           className="font-display text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-700 rounded-sm"
         >
           VPP Hương Long
@@ -49,21 +48,37 @@ export function Header({
 
         <nav
           aria-label="Điều hướng chính"
-          className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600"
+          className="hidden md:flex items-center gap-5 lg:gap-6 text-sm font-medium text-slate-600 overflow-x-auto no-scrollbar"
         >
-          {MENU_ITEMS.map((item) => (
+          {categories.map((categoryName) => (
             <a
-              key={item.label}
-              href={item.href}
-              onClick={() => handleMenuItemClick(item)}
+              key={categoryName}
+              href="#catalog"
+              onClick={(e) => {
+                e.preventDefault();
+                handleMenuItemClick(categoryName);
+              }}
               className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-700 rounded-sm"
             >
-              {item.label}
+              {categoryName}
             </a>
           ))}
         </nav>
 
-        <div className="flex items-center shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0">
+          {isAuthenticated && onOpenAdminPortal && (
+            <a
+              href="#/admin"
+              onClick={(e) => {
+                e.preventDefault();
+                onOpenAdminPortal();
+              }}
+              className="hidden md:inline-flex items-center px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              Trang quản lý
+            </a>
+          )}
+
           <button
             type="button"
             onClick={onOpenCart}
@@ -103,18 +118,37 @@ export function Header({
           className="md:hidden border-t border-slate-200 bg-white px-4 py-2 shadow-lg"
         >
           <ul className="divide-y divide-slate-100">
-            {MENU_ITEMS.map((item) => (
-              <li key={item.label}>
+            {categories.map((categoryName) => (
+              <li key={categoryName}>
                 <a
-                  href={item.href}
-                  onClick={() => handleMenuItemClick(item)}
+                  href="#catalog"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleMenuItemClick(categoryName);
+                  }}
                   className="flex items-center justify-between min-h-[44px] py-2.5 text-sm font-medium text-slate-800 hover:text-blue-700 active:bg-slate-50 rounded-md transition-colors"
                 >
-                  <span>{item.label}</span>
+                  <span>{categoryName}</span>
                   <span className="text-xs text-slate-400">Chọn</span>
                 </a>
               </li>
             ))}
+            {isAuthenticated && onOpenAdminPortal && (
+              <li>
+                <a
+                  href="#/admin"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setIsMobileMenuOpen(false);
+                    onOpenAdminPortal();
+                  }}
+                  className="flex items-center justify-between min-h-[44px] py-2.5 text-sm font-semibold text-blue-700 hover:text-blue-800 rounded-md transition-colors"
+                >
+                  <span>Trang quản lý</span>
+                  <span className="text-xs text-blue-500">Mở</span>
+                </a>
+              </li>
+            )}
           </ul>
         </nav>
       )}

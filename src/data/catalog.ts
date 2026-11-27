@@ -1,4 +1,4 @@
-import type { BundlePack, Product } from '../types/shop';
+import type { Product } from '../types/shop';
 
 export const HERO_IMAGE =
   '/src/assets/images/hero_stationery_shop_1795511372277.jpg';
@@ -316,64 +316,5 @@ export const PRODUCTS: Product[] = [
     imageFocusClass: 'scale-[1.6] origin-bottom-right',
     description:
       'Nước tinh khiết không cồn, nắp nhựa đóng kín giúp giữ ẩm đến tờ cuối cùng.',
-  },
-];
-
-export const BUNDLE_PACKS: BundlePack[] = [
-  {
-    id: 'combo-hoc-sinh',
-    comboCode: 'CB-001',
-    title: 'Combo Nhập Học Gọn Nhẹ',
-    subtitle: 'Đủ vở ô ly, túi bút, thước đo, chì màu và tẩy cho học kỳ mới.',
-    audience: 'Phù hợp học sinh tiểu học & THCS',
-    items: [
-      { productId: 'hs-vo-o-ly', quantity: 1 },
-      { productId: 'hs-tui-but-canvas', quantity: 1 },
-      { productId: 'hs-bo-thuoc-ke', quantity: 1 },
-      { productId: 'hs-chi-mau-go', quantity: 1 },
-      { productId: 'hs-tay-chi', quantity: 1 },
-    ],
-    discountAmount: 12000,
-    bundlePrice: 162000,
-    originalPrice: 174000,
-    isActive: true,
-    image: IMG_SCHOOL,
-  },
-  {
-    id: 'combo-van-phong',
-    comboCode: 'CB-002',
-    title: 'Combo Bàn Làm Việc Ngăn Nắp',
-    subtitle: 'Sổ tay lò xo, bộ bút gel, bút dạ quang, giấy note và hộp kẹp giấy.',
-    audience: 'Nhân viên văn phòng & sinh viên',
-    items: [
-      { productId: 'vpp-so-lo-xo', quantity: 1 },
-      { productId: 'vpp-but-gel', quantity: 3 },
-      { productId: 'vpp-but-da-quang', quantity: 1 },
-      { productId: 'vpp-giay-note', quantity: 1 },
-      { productId: 'vpp-kep-giay', quantity: 1 },
-    ],
-    discountAmount: 6000,
-    bundlePrice: 115000,
-    originalPrice: 121000,
-    isActive: true,
-    image: IMG_STATIONERY,
-  },
-  {
-    id: 'combo-cuoi-tuan',
-    comboCode: 'CB-003',
-    title: 'Combo Cuối Tuần Cho Bé & Gia Đình',
-    subtitle: 'Xếp hình gỗ, đất nặn an toàn kèm hộp bánh quy bơ và sữa tươi 1L.',
-    audience: 'Gia đình có trẻ nhỏ',
-    items: [
-      { productId: 'dc-xep-hinh-go', quantity: 1 },
-      { productId: 'dc-dat-nan-4-mau', quantity: 1 },
-      { productId: 'th-banh-quy-bo', quantity: 1 },
-      { productId: 'th-sua-tuoi-1l', quantity: 1 },
-    ],
-    discountAmount: 18000,
-    bundlePrice: 289000,
-    originalPrice: 307000,
-    isActive: true,
-    image: IMG_TOYS,
   },
 ];

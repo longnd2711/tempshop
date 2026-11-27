@@ -8,19 +8,34 @@ interface SafeImageProps {
   fallbackLabel?: string;
 }
 
+function resolveSafeImageSrc(rawSrc: string): string {
+  const trimmed = rawSrc.trim();
+  if (!trimmed) return '';
+  if (/^(javascript|vbscript|data:text\/html):/i.test(trimmed)) {
+    return '';
+  }
+  if (trimmed.startsWith('/src/assets/')) {
+    const base = import.meta.env.BASE_URL || '/';
+    const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+    return `${normalizedBase}${trimmed.slice(1)}`;
+  }
+  return trimmed;
+}
+
 export function SafeImage({
   src,
   alt,
   className = '',
   fallbackLabel,
 }: SafeImageProps) {
+  const resolvedSrc = resolveSafeImageSrc(src);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
     setHasError(false);
-  }, [src]);
+  }, [resolvedSrc]);
 
-  if (hasError || !src) {
+  if (hasError || !resolvedSrc) {
     return (
       <div
         className={`flex flex-col items-center justify-center bg-slate-100 text-slate-400 p-4 text-center ${className}`}
@@ -37,7 +52,7 @@ export function SafeImage({
 
   return (
     <img
-      src={src}
+      src={resolvedSrc}
       alt={alt}
       loading="lazy"
       decoding="async"

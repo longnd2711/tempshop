@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, Search, X } from 'lucide-react';
-import type { CartItem, CategoryId, Product, SortOption } from '../types/shop';
+import type {
+  CartItem,
+  CategoryId,
+  CategoryNode,
+  Product,
+  SortOption,
+} from '../types/shop';
 import { normalizeCategoryKey } from '../utils/shopLogic';
 import { ProductCard } from './ProductCard';
 
@@ -10,6 +16,7 @@ interface CatalogSectionProps {
   products: Product[];
   allProductsCount: number;
   categories: string[];
+  categoryTree?: CategoryNode[];
   selectedCategory: CategoryId;
   onSelectCategory: (category: CategoryId) => void;
   searchQuery: string;
@@ -29,6 +36,7 @@ export function CatalogSection({
   products,
   allProductsCount,
   categories,
+  categoryTree = [],
   selectedCategory,
   onSelectCategory,
   searchQuery,
@@ -65,8 +73,26 @@ export function CatalogSection({
     ...categories.map((cat) => ({ id: cat, label: cat })),
   ];
 
+  // Tìm nhóm cha đang được chọn (dù người dùng đang chọn cha hay chọn 1 nhóm con)
+  const selectedNode = categoryTree.find(
+    (c) =>
+      normalizeCategoryKey(c.name) === normalizeCategoryKey(selectedCategory) ||
+      c.id === selectedCategory,
+  );
+  const activeTopNode = selectedNode?.parentId
+    ? categoryTree.find((c) => c.id === selectedNode.parentId) ?? selectedNode
+    : selectedNode;
+  const subCategories = activeTopNode
+    ? categoryTree
+        .filter((c) => c.isActive && c.parentId === activeTopNode.id)
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'vi'))
+    : [];
+
   const isTabSelected = (tabId: string) => {
     if (selectedCategory === 'all') return tabId === 'all';
+    if (activeTopNode && normalizeCategoryKey(activeTopNode.name) === normalizeCategoryKey(tabId)) {
+      return true;
+    }
     return normalizeCategoryKey(selectedCategory) === normalizeCategoryKey(tabId);
   };
 
@@ -174,6 +200,45 @@ export function CatalogSection({
             )}
           </div>
         </div>
+
+        {subCategories.length > 0 && activeTopNode && (
+          <div
+            aria-label="Lọc theo danh mục con"
+            className="mt-3 flex flex-wrap items-center gap-2"
+          >
+            <button
+              type="button"
+              onClick={() => onSelectCategory(activeTopNode.name)}
+              className={`min-h-[34px] px-3 py-1 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+                normalizeCategoryKey(selectedCategory) ===
+                normalizeCategoryKey(activeTopNode.name)
+                  ? 'bg-blue-700 text-white border-blue-700'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+              }`}
+            >
+              Tất cả {activeTopNode.name}
+            </button>
+            {subCategories.map((sub) => {
+              const activeSub =
+                normalizeCategoryKey(selectedCategory) ===
+                normalizeCategoryKey(sub.name);
+              return (
+                <button
+                  key={sub.id}
+                  type="button"
+                  onClick={() => onSelectCategory(sub.name)}
+                  className={`min-h-[34px] px-3 py-1 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+                    activeSub
+                      ? 'bg-blue-700 text-white border-blue-700'
+                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  {sub.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {isLoadingCatalog ? (
           <div className="mt-6 sm:mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
