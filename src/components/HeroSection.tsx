@@ -20,7 +20,7 @@ export function HeroSection({ onExploreCatalog }: HeroSectionProps) {
                 Giao hàng tận nơi Chung cư BCA, Green Star, An Bình
               </h1>
               <p className="mt-3 sm:mt-4 text-sm sm:text-base text-slate-600 leading-relaxed max-w-[54ch]">
-                Shop hiện tại vẫn chưa tìm thuê được mặt bằng, bố mẹ đặt đơn bút, vở, đồ dùng cho học tập cho các con, shop sẽ giao buổi tối từ 19:00 – 22:00 hằng ngày.
+                Shop vẫn chưa tìm thuê được mặt bằng, bố mẹ đặt đơn bút, vở, đồ dùng cho học tập cho các con, shop sẽ giao buổi tối từ 19:00 – 22:00 hằng ngày.
               </p>
             </div>
 
