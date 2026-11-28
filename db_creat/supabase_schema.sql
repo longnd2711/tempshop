@@ -186,6 +186,7 @@ CREATE TABLE public.products (
     base_unit TEXT NOT NULL DEFAULT 'Cái',
     unit TEXT NOT NULL DEFAULT 'Cái',
     conversion_rate NUMERIC(10, 2) NOT NULL DEFAULT 1 CHECK (conversion_rate > 0),
+    variants TEXT[] NOT NULL DEFAULT '{}'::TEXT[],
     image_urls TEXT[] NOT NULL DEFAULT '{}',
     notes TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
@@ -224,10 +225,14 @@ SELECT
     p.name,
     p.brand,
     p.selling_price,
-    p.stock_quantity,
+    CASE
+        WHEN auth.uid() IS NOT NULL THEN p.stock_quantity
+        ELSE NULL
+    END AS stock_quantity,
     p.base_unit,
     p.unit,
     p.conversion_rate,
+    p.variants,
     p.image_urls,
     p.created_at
 FROM public.products p

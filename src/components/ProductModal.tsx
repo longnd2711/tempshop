@@ -1,28 +1,37 @@
 import { useEffect, useState } from 'react';
 import { Minus, Plus, X } from 'lucide-react';
 import type { Product } from '../types/shop';
-import { formatVnd } from '../utils/shopLogic';
+import {
+  clampOrderQuantity,
+  formatStockAndOrderedDisplay,
+  formatVnd,
+  MAX_ORDER_QUANTITY,
+} from '../utils/shopLogic';
 import { SafeImage } from './SafeImage';
 
 interface ProductModalProps {
   product: Product | null;
+  isAuthenticated?: boolean;
   onClose: () => void;
   onAddToCart: (product: Product, variant: string, quantity: number) => void;
 }
 
 export function ProductModal({
   product,
+  isAuthenticated = false,
   onClose,
   onAddToCart,
 }: ProductModalProps) {
   const [selectedVariant, setSelectedVariant] = useState('');
   const [quantity, setQuantity] = useState(1);
+  const [qtyInput, setQtyInput] = useState('1');
   const [activeImageIdx, setActiveImageIdx] = useState(0);
 
   useEffect(() => {
     if (product) {
       setSelectedVariant(product.variants[0] ?? 'Tiêu chuẩn');
       setQuantity(1);
+      setQtyInput('1');
       setActiveImageIdx(0);
     }
   }, [product]);
@@ -47,6 +56,12 @@ export function ProductModal({
         ? [product.image]
         : [];
   const mainImage = galleryImages[activeImageIdx] ?? product.image;
+
+  const updateQuantity = (next: number) => {
+    const clamped = clampOrderQuantity(next, MAX_ORDER_QUANTITY);
+    setQuantity(clamped);
+    setQtyInput(String(clamped));
+  };
 
   return (
     <div
@@ -130,7 +145,9 @@ export function ProductModal({
                 <span className="text-2xl font-bold text-slate-900 tabular-nums">
                   {formatVnd(product.price)}
                 </span>
-                <span className="text-sm text-slate-500">/ {product.unit}</span>
+                {isAuthenticated && (
+                  <span className="text-sm text-slate-500">/ {product.unit}</span>
+                )}
               </div>
 
               <p className="mt-3 text-sm text-slate-600 leading-relaxed">
@@ -165,33 +182,61 @@ export function ProductModal({
 
             <div className="mt-6 pt-4 border-t border-slate-200">
               <div className="flex items-center justify-between gap-3 mb-4">
-                <span className="text-xs text-slate-500">
-                  Tình trạng:{' '}
-                  <strong className="font-medium text-slate-800">
-                    {product.stock > 0
-                      ? `Còn ${product.stock} ${product.unit.toLowerCase()}`
-                      : 'Nhận đặt hàng'}
-                  </strong>
-                </span>
+                {isAuthenticated ? (
+                  <span className="text-xs text-slate-500">
+                    Tình trạng:{' '}
+                    <strong className="font-medium text-slate-800 tabular-nums">
+                      {formatStockAndOrderedDisplay(
+                        product.stock,
+                        product.unit,
+                        product.orderedQuantity,
+                      )}
+                    </strong>
+                  </span>
+                ) : (
+                  <label
+                    htmlFor="product-modal-qty"
+                    className="text-xs font-medium text-slate-700"
+                  >
+                    Số lượng đặt (tối đa {MAX_ORDER_QUANTITY})
+                  </label>
+                )}
 
                 <div className="inline-flex items-center border border-slate-300 rounded-lg">
                   <button
                     type="button"
                     disabled={quantity <= 1}
-                    onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                    onClick={() => updateQuantity(quantity - 1)}
                     aria-label="Giảm số lượng đặt"
                     className="w-10 h-10 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 disabled:opacity-40 rounded-l-lg cursor-pointer"
                   >
                     <Minus className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
-                  <span className="w-9 text-center text-sm font-semibold tabular-nums">
-                    {quantity}
-                  </span>
+                  <input
+                    id="product-modal-qty"
+                    type="number"
+                    min={1}
+                    max={MAX_ORDER_QUANTITY}
+                    inputMode="numeric"
+                    value={qtyInput}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setQtyInput(val);
+                      const parsed = Number(val);
+                      if (val.trim() !== '' && Number.isFinite(parsed) && parsed > 0) {
+                        setQuantity(clampOrderQuantity(parsed, MAX_ORDER_QUANTITY));
+                      }
+                    }}
+                    onBlur={() => updateQuantity(qtyInput === '' ? 1 : Number(qtyInput))}
+                    aria-label="Nhập số lượng đặt hàng"
+                    className="w-14 h-10 text-center text-sm font-semibold text-slate-900 tabular-nums bg-transparent focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
                   <button
                     type="button"
-                    onClick={() => setQuantity((q) => q + 1)}
+                    disabled={quantity >= MAX_ORDER_QUANTITY}
+                    onClick={() => updateQuantity(quantity + 1)}
                     aria-label="Tăng số lượng đặt"
-                    className="w-10 h-10 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 rounded-r-lg cursor-pointer"
+                    className="w-10 h-10 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 disabled:opacity-40 rounded-r-lg cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
@@ -201,7 +246,11 @@ export function ProductModal({
               <button
                 type="button"
                 onClick={() => {
-                  onAddToCart(product, selectedVariant, quantity);
+                  const finalQty = clampOrderQuantity(
+                    qtyInput.trim() === '' ? quantity : Number(qtyInput),
+                    MAX_ORDER_QUANTITY,
+                  );
+                  onAddToCart(product, selectedVariant, finalQty);
                   onClose();
                 }}
                 className="w-full min-h-[44px] py-2.5 px-4 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors cursor-pointer"

@@ -14,7 +14,9 @@ import {
   fetchAdminCategories,
   fetchAdminCustomers,
   fetchAdminProducts,
+  fetchAdminSuppliers,
   fetchAdminUsers,
+  fetchCashVouchers,
   fetchPurchaseOrders,
   getAdminSessionUser,
   onAdminUserAuthChange,
@@ -26,6 +28,7 @@ import {
   fetchOrdersFromSupabase,
   loadStoredOrders,
   saveStoredOrders,
+  updateOrderInSupabase,
   updateOrderStatusInSupabase,
 } from './lib/supabaseOrders';
 import {
@@ -38,6 +41,7 @@ import type {
   AdminTab,
   AdminUser,
   CartItem,
+  CashVoucherRecord,
   CategoryId,
   CategoryNode,
   CustomerRecord,
@@ -46,6 +50,7 @@ import type {
   Product,
   PurchaseOrderRecord,
   SortOption,
+  SupplierRecord,
   UserProfileRecord,
 } from './types/shop';
 import {
@@ -55,9 +60,12 @@ import {
 } from './utils/adminLogic';
 import {
   calculateCartSummary,
+  clampCartQuantity,
+  clampOrderQuantity,
   extractTopCategories,
   filterAndSortProducts,
   formatVnd,
+  MAX_ORDER_QUANTITY,
   resolveMatchingCategory,
 } from './utils/shopLogic';
 
@@ -112,6 +120,8 @@ export default function App() {
 
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [loginNonce, setLoginNonce] = useState(0);
+  const [posOpenNonce, setPosOpenNonce] = useState(0);
 
   const [orders, setOrders] = useState<OrderRecord[]>(loadStoredOrders);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
@@ -135,8 +145,15 @@ export default function App() {
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderRecord[]>(
     [],
   );
+  const [suppliers, setSuppliers] = useState<SupplierRecord[]>([]);
   const [isLoadingPurchases, setIsLoadingPurchases] = useState(false);
   const [purchasesNotice, setPurchasesNotice] = useState<string | undefined>(
+    undefined,
+  );
+
+  const [cashVouchers, setCashVouchers] = useState<CashVoucherRecord[]>([]);
+  const [isLoadingCashbook, setIsLoadingCashbook] = useState(false);
+  const [cashbookNotice, setCashbookNotice] = useState<string | undefined>(
     undefined,
   );
 
@@ -239,14 +256,37 @@ export default function App() {
     }
   }, []);
 
+  const syncSuppliers = useCallback(async () => {
+    const res = await fetchAdminSuppliers();
+    setSuppliers(res.suppliers);
+    if (res.errorMessage) {
+      setPurchasesNotice((prev) => prev || res.errorMessage);
+    }
+  }, []);
+
   const syncPurchaseOrders = useCallback(async () => {
     setIsLoadingPurchases(true);
     try {
-      const res = await fetchPurchaseOrders();
-      setPurchaseOrders(res.purchaseOrders);
-      setPurchasesNotice(res.errorMessage);
+      const [poRes, supRes] = await Promise.all([
+        fetchPurchaseOrders(),
+        fetchAdminSuppliers(),
+      ]);
+      setPurchaseOrders(poRes.purchaseOrders);
+      setSuppliers(supRes.suppliers);
+      setPurchasesNotice(poRes.errorMessage ?? supRes.errorMessage);
     } finally {
       setIsLoadingPurchases(false);
+    }
+  }, []);
+
+  const syncCashVouchers = useCallback(async () => {
+    setIsLoadingCashbook(true);
+    try {
+      const res = await fetchCashVouchers();
+      setCashVouchers(res.vouchers);
+      setCashbookNotice(res.errorMessage);
+    } finally {
+      setIsLoadingCashbook(false);
     }
   }, []);
 
@@ -268,11 +308,13 @@ export default function App() {
         setAdminCategories([]);
         setAdminProducts([]);
         setPurchaseOrders([]);
+        setSuppliers([]);
+        setCashVouchers([]);
         setAdminUsers([]);
         return;
       }
 
-      await Promise.all([syncOrders(), syncCustomers()]);
+      await Promise.all([syncOrders(), syncCustomers(), syncCashVouchers()]);
       const inventoryAllowed = canManageInventory(user.role);
       const usersAllowed = canManageUsers(user.role);
 
@@ -283,6 +325,7 @@ export default function App() {
         setAdminCategories([]);
         setAdminProducts([]);
         setPurchaseOrders([]);
+        setSuppliers([]);
       }
 
       if (usersAllowed) {
@@ -298,6 +341,7 @@ export default function App() {
     [
       syncAdminInventory,
       syncAdminUsers,
+      syncCashVouchers,
       syncCustomers,
       syncOrders,
       syncPurchaseOrders,
@@ -311,19 +355,23 @@ export default function App() {
       setAdminUser(user);
       setIsCheckingAuth(false);
       void syncAuthorizedDataForUser(user);
+      if (user) {
+        void syncCatalog(false);
+      }
     });
 
     const unsubscribe = onAdminUserAuthChange((user) => {
       setAdminUser(user);
       setIsCheckingAuth(false);
       void syncAuthorizedDataForUser(user);
+      void syncCatalog(false);
     });
 
     return () => {
       mounted = false;
       unsubscribe();
     };
-  }, [syncAuthorizedDataForUser]);
+  }, [syncAuthorizedDataForUser, syncCatalog]);
 
   useEffect(() => {
     if (!initialCache) {
@@ -399,6 +447,7 @@ export default function App() {
 
   const addToCart = (product: Product, variant: string, quantity: number) => {
     if (quantity <= 0) return;
+    const safeAdd = clampOrderQuantity(quantity, MAX_ORDER_QUANTITY);
     setCartItems((prev) => {
       const existingIndex = prev.findIndex(
         (item) => item.productId === product.id && item.variant === variant,
@@ -408,7 +457,7 @@ export default function App() {
           idx === existingIndex
             ? {
                 ...item,
-                quantity: item.quantity + quantity,
+                quantity: Math.min(MAX_ORDER_QUANTITY, item.quantity + safeAdd),
               }
             : item,
         );
@@ -423,7 +472,7 @@ export default function App() {
           unit: product.unit,
           variant,
           unitPrice: product.price,
-          quantity,
+          quantity: safeAdd,
           image: product.image,
         },
       ];
@@ -446,11 +495,31 @@ export default function App() {
           if (item.productId !== productId || item.variant !== variant) {
             return item;
           }
-          const nextQty = item.quantity + delta;
+          const nextQty = Math.min(MAX_ORDER_QUANTITY, item.quantity + delta);
           return { ...item, quantity: nextQty };
         })
         .filter((item) => item.quantity > 0),
     );
+  };
+
+  const handleSetCartItemQuantity = (
+    productId: string,
+    variant: string,
+    quantity: number,
+  ) => {
+    const clamped = clampCartQuantity(quantity, MAX_ORDER_QUANTITY);
+    setCartItems((prev) => {
+      if (clamped <= 0) {
+        return prev.filter(
+          (item) => !(item.productId === productId && item.variant === variant),
+        );
+      }
+      return prev.map((item) =>
+        item.productId === productId && item.variant === variant
+          ? { ...item, quantity: clamped }
+          : item,
+      );
+    });
   };
 
   const handleRemoveItem = (productId: string, variant: string) => {
@@ -482,6 +551,50 @@ export default function App() {
       });
       if (adminUser && order.phone) {
         void syncCustomers();
+      }
+      if (adminUser) {
+        void syncCatalog(false);
+        if (canManageInventory(adminUser.role)) {
+          void syncAdminInventory();
+        }
+      }
+    }
+    return { synced: result.synced, errorMessage: result.errorMessage };
+  };
+
+  const handleUpdateOrder = async (
+    order: OrderRecord,
+  ): Promise<{ synced: boolean; errorMessage?: string }> => {
+    setOrders((prev) => {
+      const exists = prev.some(
+        (o) =>
+          (order.id && o.id === order.id) || o.orderCode === order.orderCode,
+      );
+      const next = exists
+        ? prev.map((o) =>
+            (order.id && o.id === order.id) || o.orderCode === order.orderCode
+              ? { ...o, ...order }
+              : o,
+          )
+        : [order, ...prev];
+      saveStoredOrders(next);
+      return next;
+    });
+
+    const result = await updateOrderInSupabase(order);
+    if (result.synced) {
+      setOrders((prev) => {
+        const next = prev.map((o) =>
+          o.orderCode === order.orderCode ? result.order : o,
+        );
+        saveStoredOrders(next);
+        return next;
+      });
+      if (adminUser) {
+        void syncCatalog(false);
+        if (canManageInventory(adminUser.role)) {
+          void syncAdminInventory();
+        }
       }
     }
     return { synced: result.synced, errorMessage: result.errorMessage };
@@ -552,28 +665,23 @@ export default function App() {
     }
   };
 
-  const handleChangeStatus = async (
-    order: OrderRecord,
-    nextStatus: OrderLifecycleStatus,
-  ) => {
+  const handleToggleDelivered = async (order: OrderRecord) => {
+    const nextDelivered = !order.isDelivered;
     const nowIso = new Date().toISOString();
-    const shouldBeConfirmed =
-      nextStatus === 'confirmed' ||
-      nextStatus === 'shipping' ||
-      nextStatus === 'completed'
-        ? true
-        : nextStatus === 'pending'
-          ? false
-          : order.isConfirmed;
+    const nextStatus: OrderLifecycleStatus = nextDelivered
+      ? 'completed'
+      : order.isConfirmed
+        ? 'confirmed'
+        : 'pending';
 
     setOrders((prev) => {
       const next = prev.map((o) =>
         o.orderCode === order.orderCode
           ? {
               ...o,
+              isDelivered: nextDelivered,
+              deliveredAt: nextDelivered ? nowIso : null,
               status: nextStatus,
-              isConfirmed: shouldBeConfirmed,
-              confirmedAt: shouldBeConfirmed ? o.confirmedAt ?? nowIso : null,
             }
           : o,
       );
@@ -582,13 +690,18 @@ export default function App() {
     });
 
     const res = await updateOrderStatusInSupabase(order, {
+      isDelivered: nextDelivered,
       status: nextStatus,
-      isConfirmed: shouldBeConfirmed,
     });
     if (res.errorMessage) {
       setOrdersNotice(
         `Đã cập nhật trên máy nhưng chưa lưu lên Supabase (${res.errorMessage}).`,
       );
+    } else if (adminUser) {
+      void syncCatalog(false);
+      if (canManageInventory(adminUser.role)) {
+        void syncAdminInventory();
+      }
     }
   };
 
@@ -598,7 +711,12 @@ export default function App() {
       return { ok: false, errorMessage: res.errorMessage };
     }
     setAdminUser(res.user);
-    await syncAuthorizedDataForUser(res.user);
+    setAdminTab('orders');
+    setLoginNonce((n) => n + 1);
+    if (window.location.hash !== '#/admin') {
+      window.location.hash = '#/admin';
+    }
+    await Promise.all([syncAuthorizedDataForUser(res.user), syncCatalog(false)]);
     return { ok: true };
   };
 
@@ -609,7 +727,10 @@ export default function App() {
     setAdminCategories([]);
     setAdminProducts([]);
     setPurchaseOrders([]);
+    setSuppliers([]);
+    setCashVouchers([]);
     setAdminUsers([]);
+    await syncCatalog(false);
   };
 
   const handleNavigateShop = () => {
@@ -634,6 +755,17 @@ export default function App() {
     }
   };
 
+  const handleOpenPos = () => {
+    window.location.hash = '#/admin';
+    setCurrentPage('admin');
+    setAdminTab('orders');
+    setPosOpenNonce((n) => n + 1);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (adminUser) {
+      void syncAuthorizedDataForUser(adminUser);
+    }
+  };
+
   const handleSelectAdminTab = (tab: AdminTab) => {
     const targetHash = tab === 'orders' ? '#/admin' : `#/admin/${tab}`;
     window.location.hash = targetHash;
@@ -649,6 +781,15 @@ export default function App() {
       syncPurchaseOrders(),
       syncAdminInventory(),
       syncCatalog(false),
+    ]);
+  };
+
+  const handleRefreshCashbook = async () => {
+    await Promise.all([
+      syncCashVouchers(),
+      syncOrders(),
+      syncCustomers(),
+      ...(canManageInventory(adminUser?.role) ? [syncPurchaseOrders()] : []),
     ]);
   };
 
@@ -681,9 +822,12 @@ export default function App() {
     }
   };
 
-  const hasMobileCartBar =
-    currentPage === 'shop' && cartSummary.itemCount > 0 && !isCartOpen;
   const isAuthenticated = Boolean(adminUser);
+  const hasMobileCartBar =
+    !isAuthenticated &&
+    currentPage === 'shop' &&
+    cartSummary.itemCount > 0 &&
+    !isCartOpen;
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
@@ -696,6 +840,12 @@ export default function App() {
         onSelectNavCategory={handleSelectNavCategory}
         onNavigateShop={handleNavigateShop}
         onOpenAdminPortal={() => handleOpenAdminPortal('orders')}
+        onOpenPurchases={
+          canManageInventory(adminUser?.role)
+            ? () => handleOpenAdminPortal('purchases')
+            : undefined
+        }
+        onOpenPos={handleOpenPos}
       />
 
       <main className="flex-1">
@@ -716,26 +866,35 @@ export default function App() {
             }
             isLoadingOrders={isLoadingOrders}
             ordersNotice={ordersNotice}
+            loginNonce={loginNonce}
+            posOpenNonce={posOpenNonce}
             onRefreshOrders={() => void syncOrders()}
             onToggleOrderConfirm={(o) => void handleToggleConfirm(o)}
+            onToggleOrderDelivered={(o) => void handleToggleDelivered(o)}
             onToggleOrderPaid={(o) => void handleTogglePaid(o)}
-            onChangeOrderStatus={(o, status) =>
-              void handleChangeStatus(o, status)
-            }
             onCreateOrder={handleOrderConfirmed}
+            onUpdateOrder={handleUpdateOrder}
             customers={customers}
             isLoadingCustomers={isLoadingCustomers}
             customersNotice={customersNotice}
             onRefreshCustomers={syncCustomers}
             adminProducts={adminProducts}
-            adminCategories={adminCategories}
+            adminCategories={
+              adminCategories.length > 0 ? adminCategories : categoryTree
+            }
             isLoadingAdminProducts={isLoadingAdminProducts}
             adminProductsNotice={adminProductsNotice}
             onRefreshAdminProducts={handleRefreshAdminProducts}
             purchaseOrders={purchaseOrders}
+            suppliers={suppliers}
             isLoadingPurchases={isLoadingPurchases}
             purchasesNotice={purchasesNotice}
             onRefreshPurchases={handleRefreshPurchases}
+            onRefreshSuppliers={syncSuppliers}
+            cashVouchers={cashVouchers}
+            isLoadingCashbook={isLoadingCashbook}
+            cashbookNotice={cashbookNotice}
+            onRefreshCashbook={handleRefreshCashbook}
             adminUsers={adminUsers}
             isLoadingUsers={isLoadingUsers}
             usersNotice={usersNotice}
@@ -763,8 +922,10 @@ export default function App() {
               sortBy={sortBy}
               onSortChange={setSortBy}
               cartItems={cartItems}
+              isAuthenticated={isAuthenticated}
               onQuickAdd={handleQuickAdd}
               onUpdateQuantity={handleUpdateQuantity}
+              onSetQuantity={handleSetCartItemQuantity}
               onOpenDetail={setActiveProduct}
               onResetFilters={handleResetFilters}
               isLoadingCatalog={isLoadingCatalog}
@@ -809,6 +970,7 @@ export default function App() {
 
       <ProductModal
         product={activeProduct}
+        isAuthenticated={isAuthenticated}
         onClose={() => setActiveProduct(null)}
         onAddToCart={addToCart}
       />
@@ -817,9 +979,11 @@ export default function App() {
         isOpen={isCartOpen}
         onClose={() => setIsCartOpen(false)}
         items={cartItems}
+        orders={orders}
         isAuthenticated={isAuthenticated}
         customers={customers}
         onUpdateQuantity={handleUpdateQuantity}
+        onSetQuantity={handleSetCartItemQuantity}
         onRemoveItem={handleRemoveItem}
         onClearCart={() => setCartItems([])}
         onOrderConfirmed={(order) => void handleOrderConfirmed(order)}

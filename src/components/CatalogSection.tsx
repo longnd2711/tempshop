@@ -24,8 +24,10 @@ interface CatalogSectionProps {
   sortBy: SortOption;
   onSortChange: (value: SortOption) => void;
   cartItems: CartItem[];
+  isAuthenticated?: boolean;
   onQuickAdd: (product: Product) => void;
   onUpdateQuantity: (productId: string, variant: string, delta: number) => void;
+  onSetQuantity?: (productId: string, variant: string, quantity: number) => void;
   onOpenDetail: (product: Product) => void;
   onResetFilters: () => void;
   isLoadingCatalog?: boolean;
@@ -44,8 +46,10 @@ export function CatalogSection({
   sortBy,
   onSortChange,
   cartItems,
+  isAuthenticated = false,
   onQuickAdd,
   onUpdateQuantity,
+  onSetQuantity,
   onOpenDetail,
   onResetFilters,
   isLoadingCatalog = false,
@@ -276,8 +280,10 @@ export function CatalogSection({
                   key={product.id}
                   product={product}
                   cartQuantity={getDefaultCartQty(product)}
+                  isAuthenticated={isAuthenticated}
                   onQuickAdd={onQuickAdd}
                   onUpdateQuantity={onUpdateQuantity}
+                  onSetQuantity={onSetQuantity}
                   onOpenDetail={onOpenDetail}
                 />
               ))}

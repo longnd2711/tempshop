@@ -23,11 +23,16 @@ import type {
   CheckoutErrors,
   CustomerRecord,
   DeliveryMethod,
+  ExtraFeeItem,
   OrderRecord,
   PaymentMethod,
   PosDraftTab,
   Product,
 } from '../types/shop';
+import {
+  EXTRA_FEE_PRESETS,
+  normalizeExtraFees,
+} from '../utils/adminLogic';
 import {
   addPosItemToDraft,
   analyzePosQtyInputChange,
@@ -38,6 +43,7 @@ import {
   findExactProductByCode,
   formatPosTabDisplayTitle,
   loadPosTabsState,
+  openOrderInPosTabs,
   resolvePosQtyInputCommit,
   savePosTabsState,
   searchPosProducts,
@@ -47,6 +53,8 @@ import {
 } from '../utils/posLogic';
 import {
   formatVnd,
+  generateOrderCode,
+  getNextDailyOrderSequence,
   normalizeVietnameseText,
   validateCheckoutForm,
 } from '../utils/shopLogic';
@@ -56,7 +64,16 @@ import { SafeImage } from './SafeImage';
 interface StaffPosPanelProps {
   products: Product[];
   customers: CustomerRecord[];
+  orders?: OrderRecord[];
+  pendingOrderToLoad?: {
+    order: OrderRecord;
+    nonce: number;
+  } | null;
   onCreateOrder: (order: OrderRecord) => Promise<{
+    synced: boolean;
+    errorMessage?: string;
+  }>;
+  onUpdateOrder?: (order: OrderRecord) => Promise<{
     synced: boolean;
     errorMessage?: string;
   }>;
@@ -66,7 +83,10 @@ interface StaffPosPanelProps {
 export function StaffPosPanel({
   products,
   customers,
+  orders = [],
+  pendingOrderToLoad = null,
   onCreateOrder,
+  onUpdateOrder,
   onDraftTabCountChange,
 }: StaffPosPanelProps) {
   const initialState = useMemo(() => loadPosTabsState(), []);
@@ -74,6 +94,12 @@ export function StaffPosPanel({
   const [activeTabId, setActiveTabId] = useState<string>(
     initialState.activeTabId,
   );
+  const lastLoadedNonceRef = useRef<number>(0);
+  const tabsStateRef = useRef<{ tabs: PosDraftTab[]; activeTabId: string }>({
+    tabs: initialState.tabs,
+    activeTabId: initialState.activeTabId,
+  });
+  tabsStateRef.current = { tabs, activeTabId };
 
   const [productQuery, setProductQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -84,6 +110,8 @@ export function StaffPosPanel({
 
   const [customerSearch, setCustomerSearch] = useState('');
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [customFeeLabel, setCustomFeeLabel] = useState('');
+  const [customFeeAmount, setCustomFeeAmount] = useState('');
   const [errors, setErrors] = useState<CheckoutErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitMessage, setSubmitMessage] = useState<{
@@ -107,6 +135,31 @@ export function StaffPosPanel({
   useEffect(() => {
     setErrors({});
   }, [activeTab.id]);
+
+  useEffect(() => {
+    if (
+      !pendingOrderToLoad ||
+      pendingOrderToLoad.nonce === lastLoadedNonceRef.current
+    ) {
+      return;
+    }
+    lastLoadedNonceRef.current = pendingOrderToLoad.nonce;
+    const current = tabsStateRef.current;
+    const next = openOrderInPosTabs(
+      current.tabs,
+      current.activeTabId,
+      pendingOrderToLoad.order,
+    );
+    setTabs(next.tabs);
+    setActiveTabId(next.activeTabId);
+    setPendingProduct(null);
+    setPendingQtyInput('');
+    setProductQuery('');
+    setSubmitMessage({
+      type: 'success',
+      text: `Đã mở đơn ${pendingOrderToLoad.order.orderCode} sang tab bán hàng để xử lý.`,
+    });
+  }, [pendingOrderToLoad]);
 
   const productCategories = useMemo(() => {
     const seen = new Set<string>();
@@ -159,8 +212,13 @@ export function StaffPosPanel({
   }, [customers, activeTab.customerId, activeTab.phone]);
 
   const totals = useMemo(
-    () => calculatePosOrderTotals(activeTab.items, activeTab.discountAmount),
-    [activeTab.items, activeTab.discountAmount],
+    () =>
+      calculatePosOrderTotals(
+        activeTab.items,
+        activeTab.discountAmount,
+        activeTab.extraFees,
+      ),
+    [activeTab.items, activeTab.discountAmount, activeTab.extraFees],
   );
 
   const updateActiveTab = (updater: (prev: PosDraftTab) => PosDraftTab) => {
@@ -182,7 +240,13 @@ export function StaffPosPanel({
   };
 
   const handleAddTab = () => {
-    const nextTab = createNewPosTab(tabs.length + 1);
+    const now = new Date();
+    const nextSeq = getNextDailyOrderSequence(
+      orders,
+      now,
+      tabs.map((t) => t.orderCode),
+    );
+    const nextTab = createNewPosTab(tabs.length + 1, now, nextSeq);
     setTabs((prev) => [...prev, nextTab]);
     setActiveTabId(nextTab.id);
     setPendingProduct(null);
@@ -193,7 +257,13 @@ export function StaffPosPanel({
   };
 
   const handleCloseTab = (tabId: string) => {
-    const next = closePosTab(tabs, activeTab.id, tabId);
+    const now = new Date();
+    const nextSeq = getNextDailyOrderSequence(
+      orders,
+      now,
+      tabs.filter((t) => t.id !== tabId).map((t) => t.orderCode),
+    );
+    const next = closePosTab(tabs, activeTab.id, tabId, now, nextSeq);
     setTabs(next.tabs);
     setActiveTabId(next.activeTabId);
     setPendingProduct(null);
@@ -207,7 +277,11 @@ export function StaffPosPanel({
   ) => {
     updateActiveTab((tab) => {
       const nextItems = addPosItemToDraft(tab.items, product, variant, quantity);
-      const nextTotals = calculatePosOrderTotals(nextItems, tab.discountAmount);
+      const nextTotals = calculatePosOrderTotals(
+        nextItems,
+        tab.discountAmount,
+        tab.extraFees,
+      );
       return {
         ...tab,
         items: nextItems,
@@ -347,7 +421,11 @@ export function StaffPosPanel({
         variant,
         nextQuantity,
       );
-      const nextTotals = calculatePosOrderTotals(nextItems, tab.discountAmount);
+      const nextTotals = calculatePosOrderTotals(
+        nextItems,
+        tab.discountAmount,
+        tab.extraFees,
+      );
       return {
         ...tab,
         items: nextItems,
@@ -381,6 +459,68 @@ export function StaffPosPanel({
       discountPercent: synced.discountPercent,
       discountAmount: synced.discountAmount,
     }));
+  };
+
+  const handleAddPresetFee = (label: string) => {
+    updateActiveTab((tab) => {
+      const current = normalizeExtraFees(tab.extraFees);
+      const existing = current.find(
+        (f) => f.label.toLowerCase() === label.toLowerCase(),
+      );
+      if (existing) {
+        return tab;
+      }
+      return {
+        ...tab,
+        extraFees: [...current, { label, amount: 0 }],
+      };
+    });
+  };
+
+  const handleAddCustomFee = () => {
+    const cleanLabel = customFeeLabel.trim() || 'Phụ phí khác';
+    const cleanAmount = Math.max(
+      0,
+      Math.round(Number(customFeeAmount.replace(/[^\d]/g, '')) || 0),
+    );
+    if (!customFeeLabel.trim() && cleanAmount <= 0) return;
+
+    updateActiveTab((tab) => {
+      const current = normalizeExtraFees(tab.extraFees);
+      const nextFees: ExtraFeeItem[] = [...current, { label: cleanLabel, amount: cleanAmount }];
+      return {
+        ...tab,
+        extraFees: nextFees,
+      };
+    });
+    setCustomFeeLabel('');
+    setCustomFeeAmount('');
+  };
+
+  const handleUpdateFeeAmount = (idx: number, rawAmount: string) => {
+    const cleanAmount = Math.max(
+      0,
+      Math.round(Number(rawAmount.replace(/[^\d]/g, '')) || 0),
+    );
+    updateActiveTab((tab) => {
+      const current = normalizeExtraFees(tab.extraFees);
+      return {
+        ...tab,
+        extraFees: current.map((fee, i) =>
+          i === idx ? { ...fee, amount: cleanAmount } : fee,
+        ),
+      };
+    });
+  };
+
+  const handleRemoveFee = (idx: number) => {
+    updateActiveTab((tab) => {
+      const current = normalizeExtraFees(tab.extraFees);
+      return {
+        ...tab,
+        extraFees: current.filter((_, i) => i !== idx),
+      };
+    });
   };
 
   const handleSelectCustomer = (customer: CustomerRecord) => {
@@ -449,9 +589,19 @@ export function StaffPosPanel({
       const orderRecord = buildOrderRecordFromPosTab(activeTab, {
         markConfirmedAndPaid,
       });
-      const result = await onCreateOrder(orderRecord);
+      const isEditingExistingOrder = Boolean(
+        activeTab.sourceOrderCode && onUpdateOrder,
+      );
+      const result = isEditingExistingOrder
+        ? await onUpdateOrder!(orderRecord)
+        : await onCreateOrder(orderRecord);
       const closedTabCode = orderRecord.orderCode;
-      const nextState = closePosTab(tabs, activeTab.id, activeTab.id);
+      const now = new Date();
+      const nextSeq = getNextDailyOrderSequence(orders, now, [
+        ...tabs.map((t) => t.orderCode),
+        closedTabCode,
+      ]);
+      const nextState = closePosTab(tabs, activeTab.id, activeTab.id, now, nextSeq);
       setTabs(nextState.tabs);
       setActiveTabId(nextState.activeTabId);
       setPendingProduct(null);
@@ -461,14 +611,16 @@ export function StaffPosPanel({
       if (result.synced) {
         setSubmitMessage({
           type: 'success',
-          text: markConfirmedAndPaid
-            ? `Đã lưu & hoàn tất thanh toán đơn ${closedTabCode} (${formatVnd(orderRecord.total)}).`
-            : `Đã tạo đơn ${closedTabCode} (${formatVnd(orderRecord.total)}) ở trạng thái Chờ xử lý.`,
+          text: isEditingExistingOrder
+            ? `Đã cập nhật đơn ${closedTabCode} (${formatVnd(orderRecord.total)}).`
+            : markConfirmedAndPaid
+              ? `Đã lưu & hoàn tất thanh toán đơn ${closedTabCode} (${formatVnd(orderRecord.total)}).`
+              : `Đã tạo đơn ${closedTabCode} (${formatVnd(orderRecord.total)}) ở trạng thái Chờ xử lý.`,
         });
       } else {
         setSubmitMessage({
           type: 'warning',
-          text: `Đã tạo đơn ${closedTabCode} trên máy nhưng chưa đồng bộ Supabase${
+          text: `${isEditingExistingOrder ? 'Đã cập nhật' : 'Đã tạo'} đơn ${closedTabCode} trên máy nhưng chưa đồng bộ Supabase${
             result.errorMessage ? ` (${result.errorMessage})` : ''
           }.`,
         });
@@ -493,6 +645,7 @@ export function StaffPosPanel({
             const tabTotals = calculatePosOrderTotals(
               tab.items,
               tab.discountAmount,
+              tab.extraFees,
             );
             const tabTitle = formatPosTabDisplayTitle(tab, idx);
             return (
@@ -829,7 +982,9 @@ export function StaffPosPanel({
           <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-200">
             <div>
               <h3 className="font-display text-base sm:text-lg font-bold text-slate-900">
-                Đơn hàng đang soạn
+                {activeTab.sourceOrderCode
+                  ? `Xử lý đơn ${activeTab.sourceOrderCode}`
+                  : 'Đơn hàng đang soạn'}
               </h3>
               <p className="text-xs text-slate-500 font-mono tabular-nums">
                 Mã đơn: {activeTab.orderCode}
@@ -844,6 +999,7 @@ export function StaffPosPanel({
                     items: [],
                     discountAmount: 0,
                     discountPercent: 0,
+                    extraFees: [],
                   }))
                 }
                 className="text-xs font-medium text-rose-600 hover:text-rose-800 cursor-pointer"
@@ -1033,6 +1189,105 @@ export function StaffPosPanel({
                 </div>
               </div>
             </div>
+
+            {/* Order-level Extra Fees (phụ phí) */}
+            <div className="space-y-2 pt-2 border-t border-slate-200">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-700">
+                  Phụ phí đơn hàng
+                </span>
+                {totals.extraFeeTotal > 0 && (
+                  <span className="text-xs font-semibold text-blue-700 tabular-nums">
+                    +{formatVnd(totals.extraFeeTotal)}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {EXTRA_FEE_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => handleAddPresetFee(preset)}
+                    className="px-2 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-blue-50 hover:text-blue-700 border border-slate-300 rounded-md transition-colors cursor-pointer"
+                  >
+                    + {preset}
+                  </button>
+                ))}
+              </div>
+
+              {normalizeExtraFees(activeTab.extraFees).length > 0 && (
+                <div className="space-y-1.5">
+                  {normalizeExtraFees(activeTab.extraFees).map((fee, idx) => (
+                    <div
+                      key={`${fee.label}-${idx}`}
+                      className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5"
+                    >
+                      <span className="text-xs font-medium text-slate-800 flex-1 truncate">
+                        {fee.label}
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1000"
+                        aria-label={`Số tiền phụ phí ${fee.label}`}
+                        value={fee.amount || ''}
+                        placeholder="0"
+                        onChange={(e) => handleUpdateFeeAmount(idx, e.target.value)}
+                        className="w-24 px-2 py-1 text-right text-xs font-mono tabular-nums bg-white border border-slate-300 rounded-md focus:outline-2 focus:outline-blue-700 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                      <span className="text-[11px] text-slate-400">đ</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveFee(idx)}
+                        aria-label={`Xóa phụ phí ${fee.label}`}
+                        className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid grid-cols-12 gap-1.5 items-center">
+                <input
+                  type="text"
+                  value={customFeeLabel}
+                  onChange={(e) => setCustomFeeLabel(e.target.value)}
+                  placeholder="Tên phụ phí khác..."
+                  aria-label="Tên phụ phí khác"
+                  className="col-span-6 min-h-[34px] px-2.5 py-1 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-700"
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={customFeeAmount}
+                  onChange={(e) => setCustomFeeAmount(e.target.value)}
+                  placeholder="Số tiền"
+                  aria-label="Số tiền phụ phí khác"
+                  className="col-span-4 min-h-[34px] px-2 py-1 text-right text-xs font-mono bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-700 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddCustomFee}
+                  aria-label="Thêm phụ phí"
+                  className="col-span-2 min-h-[34px] inline-flex items-center justify-center text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+
+            {totals.extraFeeTotal > 0 && (
+              <div className="flex items-center justify-between text-xs text-slate-600 pt-1">
+                <span>Tổng phụ phí</span>
+                <span className="font-semibold text-slate-900 tabular-nums">
+                  +{formatVnd(totals.extraFeeTotal)}
+                </span>
+              </div>
+            )}
 
             <div className="pt-2.5 border-t border-slate-200 flex items-center justify-between">
               <span className="font-semibold text-slate-900">Tổng thanh toán</span>

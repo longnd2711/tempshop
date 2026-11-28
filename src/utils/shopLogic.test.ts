@@ -1,13 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as XLSX from 'xlsx';
 import {
   calculateCartSummary,
+  clampCartQuantity,
+  clampOrderQuantity,
   clearSavedGuestCheckout,
+  decodeRfc4648Base32,
+  encodeRfc4648Base32,
   extractCategories,
   extractTopCategories,
   filterAndSortProducts,
+  formatStockAndOrderedDisplay,
+  formatStockDisplay,
+  formatStockQuantity,
   formatVnd,
+  generateOrderCode,
+  getNextDailyOrderSequence,
   loadSavedGuestCheckout,
+  MAX_ORDER_QUANTITY,
   normalizeVietnameseText,
   resolveMatchingCategory,
   saveGuestCheckout,
@@ -35,26 +46,60 @@ import {
   saveStoredOrders,
 } from '../lib/supabaseOrders';
 import {
+  mapSupabaseCashVoucherRow,
   mapSupabaseCustomerRow,
   mapSupabasePurchaseOrderRow,
+  mapSupabaseSupplierRow,
   mapSupabaseUserProfileRow,
 } from '../lib/supabaseAdmin';
 import {
+  buildMergedCustomerPreview,
+  buildNeedImportCandidates,
   buildRevenueChartData,
+  calculateCashbookSummary,
+  calculateCustomerDebtMap,
   calculatePurchaseSummary,
+  calculateSuggestedImportQuantity,
+  calculateSupplierDebtMap,
   canAccessAdminTab,
   canManageInventory,
   canManageUsers,
+  canViewAllRevenuePeriods,
+  canViewRevenueChart,
+  clampOrderFromDateForRole,
   computePurchaseLineTotal,
+  findMinimumPackSumAtLeast,
+  formatStockBoundInput,
+  formatVariantsInput,
+  generatePurchaseCode,
+  generateVoucherCode,
   getAllowedAdminTabs,
+  getAllowedVoucherCategoriesForRole,
+  getEffectivePurchasePackOptions,
+  getLatestProductImportCostMap,
+  getOrderDefaultDateRangePreset,
+  getStaffMinOrderDateTime,
+  getTodayFullDayPreset,
+  getVisibleRevenueModesForRole,
   getYesterdayEveningPreset,
+  matchesProductStockFilter,
+  normalizeExtraFees,
+  normalizePurchasePackOptions,
   parseAdminRouteFromHash,
   parseImageUrlsInput,
+  parseNullableStockBound,
+  parseVariantsInput,
   resolveAllowedAdminTab,
+  REVENUE_PERIOD_LABELS,
   slugifyVietnamese,
+  sumExtraFees,
   syncDiscountFromAmount,
   syncDiscountFromPercent,
 } from './adminLogic';
+import {
+  buildNeedImportExportRows,
+  parsePurchaseImportWorkbook,
+} from './purchaseExcelLogic';
 import {
   buildDriveSyncPlan,
   buildProductImageFilename,
@@ -79,7 +124,9 @@ import {
   createNewPosTab,
   findExactProductByCode,
   formatPosTabDisplayTitle,
+  isPosTabBlank,
   loadPosTabsState,
+  openOrderInPosTabs,
   POS_TABS_STORAGE_KEY,
   resolvePosQtyInputCommit,
   savePosTabsState,
@@ -88,7 +135,16 @@ import {
   syncOrderDiscountFromAmount,
   syncOrderDiscountFromPercent,
 } from './posLogic';
-import type { CartItem, CategoryNode, OrderRecord, Product } from '../types/shop';
+import type {
+  CartItem,
+  CashVoucherRecord,
+  CategoryNode,
+  CustomerRecord,
+  OrderRecord,
+  Product,
+  PurchaseOrderRecord,
+  SupplierRecord,
+} from '../types/shop';
 
 const sampleProducts: Product[] = [
   {
@@ -604,18 +660,24 @@ test('RBAC adminLogic grants admin full access, manager inventory+orders without
   assert.equal(canManageUsers('manager'), false);
   assert.equal(canManageUsers('admin'), true);
 
-  assert.deepEqual(getAllowedAdminTabs('staff'), ['orders', 'customers']);
+  assert.deepEqual(getAllowedAdminTabs('staff'), [
+    'orders',
+    'customers',
+    'cashbook',
+  ]);
   assert.deepEqual(getAllowedAdminTabs('manager'), [
     'orders',
     'customers',
     'products',
     'purchases',
+    'cashbook',
   ]);
   assert.deepEqual(getAllowedAdminTabs('admin'), [
     'orders',
     'customers',
     'products',
     'purchases',
+    'cashbook',
     'users',
   ]);
 
@@ -623,10 +685,13 @@ test('RBAC adminLogic grants admin full access, manager inventory+orders without
   assert.equal(resolveAllowedAdminTab('staff', 'purchases'), 'orders');
   assert.equal(resolveAllowedAdminTab('staff', 'users'), 'orders');
   assert.equal(resolveAllowedAdminTab('staff', 'customers'), 'customers');
+  assert.equal(resolveAllowedAdminTab('staff', 'cashbook'), 'cashbook');
   assert.equal(resolveAllowedAdminTab('manager', 'products'), 'products');
   assert.equal(resolveAllowedAdminTab('manager', 'purchases'), 'purchases');
+  assert.equal(resolveAllowedAdminTab('manager', 'cashbook'), 'cashbook');
   assert.equal(resolveAllowedAdminTab('manager', 'users'), 'orders');
   assert.equal(resolveAllowedAdminTab('admin', 'purchases'), 'purchases');
+  assert.equal(resolveAllowedAdminTab('admin', 'cashbook'), 'cashbook');
   assert.equal(resolveAllowedAdminTab('admin', 'users'), 'users');
 
   assert.deepEqual(parseAdminRouteFromHash('#/admin'), { page: 'admin', tab: 'orders' });
@@ -634,6 +699,7 @@ test('RBAC adminLogic grants admin full access, manager inventory+orders without
   assert.deepEqual(parseAdminRouteFromHash('#/admin/customers'), { page: 'admin', tab: 'customers' });
   assert.deepEqual(parseAdminRouteFromHash('#/admin/products'), { page: 'admin', tab: 'products' });
   assert.deepEqual(parseAdminRouteFromHash('#/admin/purchases'), { page: 'admin', tab: 'purchases' });
+  assert.deepEqual(parseAdminRouteFromHash('#/admin/cashbook'), { page: 'admin', tab: 'cashbook' });
   assert.deepEqual(parseAdminRouteFromHash('#/admin/users'), { page: 'admin', tab: 'users' });
   assert.deepEqual(parseAdminRouteFromHash('#catalog'), { page: 'shop', tab: 'orders' });
 });
@@ -846,6 +912,7 @@ test('buildRevenueChartData aggregates day, week, month, quarter, year, and cust
       total: 100000,
       status: 'confirmed',
       isConfirmed: true,
+      isDelivered: false,
       isPaid: true,
     },
     {
@@ -864,6 +931,7 @@ test('buildRevenueChartData aggregates day, week, month, quarter, year, and cust
       total: 50000,
       status: 'pending',
       isConfirmed: false,
+      isDelivered: false,
       isPaid: false,
     },
     {
@@ -882,6 +950,7 @@ test('buildRevenueChartData aggregates day, week, month, quarter, year, and cust
       total: 999000,
       status: 'cancelled',
       isConfirmed: false,
+      isDelivered: false,
       isPaid: false,
     },
     {
@@ -900,6 +969,7 @@ test('buildRevenueChartData aggregates day, week, month, quarter, year, and cust
       total: 220000,
       status: 'completed',
       isConfirmed: true,
+      isDelivered: true,
       isPaid: true,
     },
     {
@@ -918,6 +988,7 @@ test('buildRevenueChartData aggregates day, week, month, quarter, year, and cust
       total: 80000,
       status: 'completed',
       isConfirmed: true,
+      isDelivered: true,
       isPaid: true,
     },
   ];
@@ -1352,6 +1423,1322 @@ test('buildDriveSyncPlan skips synced Supabase products, detects 0_ Drive-only &
   assert.equal(supaPlan.allMatches.length, 64);
   assert.equal(supaPlan.currentBatch.length, 50);
   assert.equal(supaPlan.remainingCount, 14);
+});
+
+test('formatStockQuantity & formatStockDisplay format 002, 000, negative, and thousands cleanly', () => {
+  assert.equal(formatStockQuantity(2), '002');
+  assert.equal(formatStockQuantity(15), '015');
+  assert.equal(formatStockQuantity(120), '120');
+  assert.equal(formatStockQuantity(0), '000');
+  assert.equal(formatStockQuantity(-3), '-003');
+  assert.equal(formatStockQuantity(1250), '1.250');
+  assert.equal(formatStockQuantity(-1250), '-1.250');
+
+  assert.equal(formatStockDisplay(2, 'Cái'), 'Còn 002 Cái');
+  assert.equal(formatStockDisplay(0, 'Cái'), 'Còn 000 Cái');
+  assert.equal(formatStockDisplay(-5, 'Cây'), 'Còn -005 Cây');
+});
+
+test('clampOrderQuantity and clampCartQuantity enforce 1..999 and 0..999 bounds', () => {
+  assert.equal(MAX_ORDER_QUANTITY, 999);
+  assert.equal(clampOrderQuantity(0), 1);
+  assert.equal(clampOrderQuantity(-10), 1);
+  assert.equal(clampOrderQuantity(15), 15);
+  assert.equal(clampOrderQuantity(999), 999);
+  assert.equal(clampOrderQuantity(1500), 999);
+
+  assert.equal(clampCartQuantity(0), 0);
+  assert.equal(clampCartQuantity(-5), 0);
+  assert.equal(clampCartQuantity(250), 250);
+  assert.equal(clampCartQuantity(2000), 999);
+});
+
+test('parseVariantsInput, formatVariantsInput, and mapSupabaseRowToProduct handle variants & null stock', () => {
+  assert.deepEqual(
+    parseVariantsInput('Mực xanh, Mực đỏ; mực xanh | Mực đen\n '),
+    ['Mực xanh', 'Mực đỏ', 'Mực đen'],
+  );
+  assert.deepEqual(parseVariantsInput('   '), []);
+  assert.equal(formatVariantsInput([]), '');
+  assert.equal(formatVariantsInput(['Tiêu chuẩn']), '');
+  assert.equal(
+    formatVariantsInput(['Mực xanh', 'Mực đỏ']),
+    'Mực xanh, Mực đỏ',
+  );
+
+  const anonProduct = mapSupabaseRowToProduct(
+    {
+      id: 'prod-anon',
+      sku: 'BUT-01',
+      name: 'Bút mực TL',
+      selling_price: 15000,
+      stock_quantity: null,
+      unit: 'Cây',
+      variants: ['Mực xanh', 'Mực đỏ', 'Mực đen'],
+    },
+    0,
+  );
+  assert.equal(anonProduct.stock, 0);
+  assert.deepEqual(anonProduct.variants, ['Mực xanh', 'Mực đỏ', 'Mực đen']);
+});
+
+test('getTodayFullDayPreset returns 00:00 to 23:59 today and includes late-night orders up to 23:59:59', () => {
+  const ref = new Date(2026, 10, 27, 14, 20, 0, 0);
+  const preset = getTodayFullDayPreset(ref);
+  assert.equal(preset.start, '2026-11-27T00:00');
+  assert.equal(preset.end, '2026-11-27T23:59');
+
+  const todayMidnightIso = new Date(2026, 10, 27, 0, 0, 5, 0).toISOString();
+  const todayLastMinuteIso = new Date(2026, 10, 27, 23, 59, 45, 0).toISOString();
+  const yesterdayIso = new Date(2026, 10, 26, 23, 59, 59, 0).toISOString();
+
+  const orders: OrderRecord[] = [
+    {
+      orderCode: 'DH-START',
+      createdAt: '27/11/2026, 00:00',
+      createdAtIso: todayMidnightIso,
+      customerName: 'Khách sáng sớm',
+      phone: '0901111111',
+      address: 'CT2',
+      note: '',
+      deliveryMethod: 'delivery',
+      paymentMethod: 'transfer',
+      items: [],
+      subtotal: 40000,
+      shippingFee: 0,
+      total: 40000,
+      status: 'completed',
+      isConfirmed: true,
+      isDelivered: true,
+      isPaid: true,
+    },
+    {
+      orderCode: 'DH-LATE',
+      createdAt: '27/11/2026, 23:59',
+      createdAtIso: todayLastMinuteIso,
+      customerName: 'Khách khuya',
+      phone: '0902222222',
+      address: 'CT2',
+      note: '',
+      deliveryMethod: 'delivery',
+      paymentMethod: 'transfer',
+      items: [],
+      subtotal: 65000,
+      shippingFee: 0,
+      total: 65000,
+      status: 'confirmed',
+      isConfirmed: true,
+      isDelivered: false,
+      isPaid: false,
+    },
+    {
+      orderCode: 'DH-PREV',
+      createdAt: '26/11/2026, 23:59',
+      createdAtIso: yesterdayIso,
+      customerName: 'Khách hôm qua',
+      phone: '0903333333',
+      address: 'CT2',
+      note: '',
+      deliveryMethod: 'delivery',
+      paymentMethod: 'transfer',
+      items: [],
+      subtotal: 99000,
+      shippingFee: 0,
+      total: 99000,
+      status: 'completed',
+      isConfirmed: true,
+      isDelivered: true,
+      isPaid: true,
+    },
+  ];
+
+  const summary = buildRevenueChartData(orders, {
+    mode: 'custom',
+    referenceDate: ref,
+    customStart: preset.start,
+    customEnd: preset.end,
+  });
+
+  assert.equal(summary.customRangeInvalid, false);
+  assert.equal(summary.granularity, 'hour');
+  assert.equal(summary.buckets.length, 24);
+  assert.equal(summary.totalOrders, 2);
+  assert.equal(summary.totalRevenue, 105000);
+  assert.equal(summary.buckets[0].revenue, 40000);
+  assert.equal(summary.buckets[23].revenue, 65000);
+});
+
+test('formatStockAndOrderedDisplay formats stock and ordered quantity cleanly', () => {
+  assert.equal(
+    formatStockAndOrderedDisplay(5, 'Cái', 2),
+    'Còn 005 Cái, Khách đặt 002',
+  );
+  assert.equal(
+    formatStockAndOrderedDisplay(-3, 'Cây', 0),
+    'Còn -003 Cây, Khách đặt 000',
+  );
+  assert.equal(
+    formatStockAndOrderedDisplay(0, 'Quyển', undefined),
+    'Còn 000 Quyển, Khách đặt 000',
+  );
+});
+
+test('revenue chart role permissions and Vietnamese period labels match requirements', () => {
+  assert.equal(canViewAllRevenuePeriods('admin'), true);
+  assert.equal(canViewAllRevenuePeriods('manager'), true);
+  assert.equal(canViewAllRevenuePeriods('staff'), false);
+  assert.equal(canViewAllRevenuePeriods(null), false);
+
+  assert.deepEqual(getVisibleRevenueModesForRole('staff'), ['day']);
+  assert.deepEqual(getVisibleRevenueModesForRole('manager'), [
+    'day',
+    'week',
+    'month',
+    'quarter',
+    'year',
+    'custom',
+  ]);
+  assert.deepEqual(getVisibleRevenueModesForRole('admin'), [
+    'day',
+    'week',
+    'month',
+    'quarter',
+    'year',
+    'custom',
+  ]);
+
+  assert.equal(REVENUE_PERIOD_LABELS.day, 'Trong ngày');
+  assert.equal(REVENUE_PERIOD_LABELS.week, 'Trong tuần');
+  assert.equal(REVENUE_PERIOD_LABELS.month, 'Trong tháng');
+  assert.equal(REVENUE_PERIOD_LABELS.quarter, 'Trong quý');
+  assert.equal(REVENUE_PERIOD_LABELS.year, 'Trong năm');
+  assert.equal(REVENUE_PERIOD_LABELS.custom, 'Tùy chỉnh');
+});
+
+test('purchase pack options and auto-calculated suggested import quantity respect minStock, maxStock, orderedQuantity, and packs', () => {
+  const customPacks = normalizePurchasePackOptions(
+    [
+      { label: 'Thùng', factor: 120 },
+      { label: 'Hộp', factor: 12 },
+      { label: 'Hộp', factor: 12 },
+      { label: 'Lỗi', factor: 0 },
+    ],
+    'Cây',
+  );
+  assert.deepEqual(customPacks, [
+    { label: 'Hộp', factor: 12 },
+    { label: 'Thùng', factor: 120 },
+  ]);
+
+  // Fallback to default base + pack when purchasePackOptions is empty
+  const fallbackPacks = getEffectivePurchasePackOptions({
+    baseUnit: 'Cái',
+    unit: 'Hộp',
+    conversionRate: 20,
+    purchasePackOptions: [],
+  });
+  assert.deepEqual(fallbackPacks, [
+    { label: 'Cái', factor: 1 },
+    { label: 'Hộp', factor: 20 },
+  ]);
+
+  // When explicit pack options exist (without single piece), preserve them
+  const boxOnlyPacks = getEffectivePurchasePackOptions({
+    baseUnit: 'Cây',
+    unit: 'Hộp',
+    conversionRate: 12,
+    purchasePackOptions: [
+      { label: 'Hộp', factor: 12 },
+      { label: 'Thùng', factor: 120 },
+    ],
+  });
+  assert.deepEqual(boxOnlyPacks, [
+    { label: 'Hộp', factor: 12 },
+    { label: 'Thùng', factor: 120 },
+  ]);
+
+  // Minimum pack sums without single piece
+  assert.equal(findMinimumPackSumAtLeast(15, [12, 120]), 24);
+  assert.equal(findMinimumPackSumAtLeast(125, [12, 120]), 132);
+  assert.equal(findMinimumPackSumAtLeast(15, [1, 20, 120]), 15);
+
+  // Above or equal minStock => 0
+  assert.equal(
+    calculateSuggestedImportQuantity({
+      stock: 15,
+      orderedQuantity: 5,
+      minStock: 10,
+      maxStock: 50,
+      packOptions: boxOnlyPacks,
+    }),
+    0,
+  );
+
+  // Strictly below minStock => reaches >= maxStock using valid pack multiples
+  // netAvailable = 8 - 5 = 3 (< minStock 10), rawNeeded = 50 - 3 = 47 => minimum multiple of 12 >= 47 is 48
+  assert.equal(
+    calculateSuggestedImportQuantity({
+      stock: 8,
+      orderedQuantity: 5,
+      minStock: 10,
+      maxStock: 50,
+      packOptions: boxOnlyPacks,
+    }),
+    48,
+  );
+
+  // With single piece allowed: exact 47
+  assert.equal(
+    calculateSuggestedImportQuantity({
+      stock: 8,
+      orderedQuantity: 5,
+      minStock: 10,
+      maxStock: 50,
+      packOptions: [{ label: 'Cây', factor: 1 }, ...boxOnlyPacks],
+    }),
+    47,
+  );
+
+  // Null minStock => 0; null maxStock with net < minStock => fills up to minStock
+  assert.equal(
+    calculateSuggestedImportQuantity({
+      stock: 0,
+      orderedQuantity: 2,
+      minStock: null,
+      maxStock: 20,
+      packOptions: [{ label: 'Cái', factor: 1 }],
+    }),
+    0,
+  );
+  assert.equal(
+    calculateSuggestedImportQuantity({
+      stock: 2,
+      orderedQuantity: 1,
+      minStock: 10,
+      maxStock: null,
+      packOptions: [{ label: 'Cái', factor: 1 }],
+    }),
+    9,
+  );
+});
+
+test('filterOrders supports deliveryFilter and mapSupabaseRowToProduct maps nullable bounds & reorder fields', () => {
+  const deliveredOrder: OrderRecord = {
+    orderCode: 'DH-DEL-1',
+    createdAt: '27/11/2026, 10:00',
+    customerName: 'Chị Hoa',
+    phone: '0911222333',
+    address: 'CT2',
+    note: '',
+    deliveryMethod: 'delivery',
+    paymentMethod: 'transfer',
+    items: [],
+    subtotal: 50000,
+    shippingFee: 0,
+    total: 50000,
+    status: 'completed',
+    isConfirmed: true,
+    isDelivered: true,
+    isPaid: true,
+  };
+  const pendingOrder: OrderRecord = {
+    ...deliveredOrder,
+    orderCode: 'DH-WAIT-2',
+    status: 'confirmed',
+    isDelivered: false,
+    isPaid: false,
+  };
+
+  assert.deepEqual(
+    filterOrders([deliveredOrder, pendingOrder], {
+      query: '',
+      confirmFilter: 'all',
+      deliveryFilter: 'delivered',
+      payFilter: 'all',
+    }).map((o) => o.orderCode),
+    ['DH-DEL-1'],
+  );
+
+  assert.deepEqual(
+    filterOrders([deliveredOrder, pendingOrder], {
+      query: '',
+      confirmFilter: 'all',
+      deliveryFilter: 'undelivered',
+      payFilter: 'all',
+    }).map((o) => o.orderCode),
+    ['DH-WAIT-2'],
+  );
+
+  const mappedNullProduct = mapSupabaseRowToProduct(
+    {
+      id: 'p-nullable',
+      sku: 'SKU-NULL',
+      name: 'Bút chì Staedtler',
+      selling_price: 9000,
+      stock_quantity: 5,
+      ordered_quantity: 3,
+      purchase_pack_options: [
+        { label: 'Hộp', factor: 12 },
+        { label: 'Thùng', factor: 120 },
+      ],
+      min_stock: null,
+      max_stock: null,
+      image_urls: null,
+    },
+    0,
+  );
+
+  assert.equal(mappedNullProduct.minStock, null);
+  assert.equal(mappedNullProduct.maxStock, null);
+  assert.equal(mappedNullProduct.orderedQuantity, 3);
+  assert.deepEqual(mappedNullProduct.purchasePackOptions, [
+    { label: 'Hộp', factor: 12 },
+    { label: 'Thùng', factor: 120 },
+  ]);
+  assert.equal(mappedNullProduct.image, '');
+});
+
+test('openOrderInPosTabs loads order into blank tab, focuses duplicate order, and preserves orderCode when building', () => {
+  const blankTab = createNewPosTab(1);
+  assert.equal(isPosTabBlank(blankTab), true);
+
+  const orderToEdit: OrderRecord = {
+    id: '550e8400-e29b-41d4-a716-446655440000',
+    orderCode: 'DH-1015-888',
+    createdAt: '27/11/2026, 10:15',
+    customerName: 'Anh Minh',
+    phone: '0987654321',
+    address: 'CT3.0902',
+    note: 'Giao tối',
+    deliveryMethod: 'delivery',
+    paymentMethod: 'transfer',
+    items: [
+      {
+        productId: 'p2',
+        sku: 'VPP-002',
+        name: 'Bút gel mực xanh 0.5mm',
+        categoryLabel: 'Văn phòng phẩm',
+        unit: 'Cây',
+        variant: 'Mực xanh',
+        unitPrice: 8000,
+        quantity: 3,
+        image: '/img1.jpg',
+      },
+    ],
+    subtotal: 24000,
+    discountAmount: 4000,
+    shippingFee: 0,
+    total: 20000,
+    status: 'confirmed',
+    isConfirmed: true,
+    isDelivered: false,
+    isPaid: false,
+  };
+
+  // Reuses single blank tab
+  const firstOpen = openOrderInPosTabs([blankTab], blankTab.id, orderToEdit);
+  assert.equal(firstOpen.tabs.length, 1);
+  assert.equal(firstOpen.activeTabId, blankTab.id);
+  assert.equal(firstOpen.tabs[0].sourceOrderCode, 'DH-1015-888');
+  assert.equal(firstOpen.tabs[0].customerName, 'Anh Minh');
+  assert.equal(firstOpen.tabs[0].discountAmount, 4000);
+  assert.equal(firstOpen.tabs[0].items.length, 1);
+
+  // Calling again focuses existing tab without duplicating
+  const duplicateOpen = openOrderInPosTabs(
+    firstOpen.tabs,
+    firstOpen.activeTabId,
+    orderToEdit,
+  );
+  assert.equal(duplicateOpen.tabs.length, 1);
+  assert.equal(duplicateOpen.activeTabId, blankTab.id);
+
+  // Opening a second different order adds a new tab
+  const secondOrder: OrderRecord = {
+    ...orderToEdit,
+    id: '660e8400-e29b-41d4-a716-446655440111',
+    orderCode: 'DH-1020-999',
+    customerName: 'Chị Nga',
+  };
+  const secondOpen = openOrderInPosTabs(
+    duplicateOpen.tabs,
+    duplicateOpen.activeTabId,
+    secondOrder,
+  );
+  assert.equal(secondOpen.tabs.length, 2);
+  assert.equal(secondOpen.tabs[1].sourceOrderCode, 'DH-1020-999');
+
+  const rebuilt = buildOrderRecordFromPosTab(firstOpen.tabs[0], {
+    markConfirmedAndPaid: true,
+  });
+  assert.equal(rebuilt.id, '550e8400-e29b-41d4-a716-446655440000');
+  assert.equal(rebuilt.orderCode, 'DH-1015-888');
+  assert.equal(rebuilt.total, 20000);
+  assert.equal(rebuilt.isPaid, true);
+});
+
+test('matchesProductStockFilter filters below-min and out-of-stock products accurately', () => {
+  assert.equal(matchesProductStockFilter({ stock: 3, minStock: 5 }, 'below-min'), true);
+  assert.equal(matchesProductStockFilter({ stock: 5, minStock: 5 }, 'below-min'), false);
+  assert.equal(matchesProductStockFilter({ stock: -2, minStock: 5 }, 'below-min'), true);
+  assert.equal(matchesProductStockFilter({ stock: 0, minStock: null }, 'below-min'), false);
+
+  assert.equal(matchesProductStockFilter({ stock: 0, minStock: 5 }, 'out-of-stock'), true);
+  assert.equal(matchesProductStockFilter({ stock: -4, minStock: null }, 'out-of-stock'), true);
+  assert.equal(matchesProductStockFilter({ stock: 1, minStock: 5 }, 'out-of-stock'), false);
+
+  assert.equal(matchesProductStockFilter({ stock: -4, minStock: 5 }, 'all'), true);
+});
+
+test('canViewRevenueChart restricts revenue chart to manager and admin only', () => {
+  assert.equal(canViewRevenueChart('admin'), true);
+  assert.equal(canViewRevenueChart('manager'), true);
+  assert.equal(canViewRevenueChart('staff'), false);
+  assert.equal(canViewRevenueChart(null), false);
+  assert.equal(canViewRevenueChart(undefined), false);
+});
+
+test('buildRevenueChartData filters by category hierarchy, selected products, and prorates order discount', () => {
+  const categories: CategoryNode[] = [
+    { id: 'cat-vpp', name: 'Văn phòng phẩm', slug: 'van-phong-pham', parentId: null, sortOrder: 1, isActive: true },
+    { id: 'cat-pen', name: 'Bút viết', slug: 'but-viet', parentId: 'cat-vpp', sortOrder: 1, isActive: true },
+    { id: 'cat-toy', name: 'Đồ chơi', slug: 'do-choi', parentId: null, sortOrder: 2, isActive: true },
+  ];
+  const products: Product[] = [
+    {
+      id: 'prod-pen',
+      sku: 'BUT-01',
+      name: 'Bút bi TL027',
+      category: 'Bút viết',
+      categoryId: 'cat-pen',
+      categorySlug: 'but-viet',
+      categoryLabel: 'Bút viết',
+      price: 5000,
+      unit: 'Cây',
+      stock: 50,
+      popularRank: 1,
+      variants: ['Xanh'],
+      image: '',
+      description: '',
+    },
+    {
+      id: 'prod-toy',
+      sku: 'TOY-01',
+      name: 'Bộ xếp hình',
+      category: 'Đồ chơi',
+      categoryId: 'cat-toy',
+      categorySlug: 'do-choi',
+      categoryLabel: 'Đồ chơi',
+      price: 50000,
+      unit: 'Bộ',
+      stock: 10,
+      popularRank: 2,
+      variants: ['Tiêu chuẩn'],
+      image: '',
+      description: '',
+    },
+  ];
+  const orders: OrderRecord[] = [
+    {
+      orderCode: 'DH-1000-101',
+      createdAt: '28/11/2026, 10:00',
+      createdAtIso: '2026-11-28T10:00:00',
+      customerName: 'Khách A',
+      phone: '0901111111',
+      address: '',
+      note: '',
+      deliveryMethod: 'pickup',
+      paymentMethod: 'transfer',
+      items: [
+        {
+          productId: 'prod-pen',
+          sku: 'BUT-01',
+          name: 'Bút bi TL027',
+          categoryLabel: '',
+          unit: 'Cây',
+          variant: 'Xanh',
+          unitPrice: 5000,
+          quantity: 10,
+          image: '',
+        },
+        {
+          productId: 'prod-toy',
+          sku: 'TOY-01',
+          name: 'Bộ xếp hình',
+          categoryLabel: '',
+          unit: 'Bộ',
+          variant: 'Tiêu chuẩn',
+          unitPrice: 50000,
+          quantity: 1,
+          image: '',
+        },
+      ],
+      subtotal: 100000,
+      discountAmount: 10000,
+      shippingFee: 0,
+      total: 90000,
+      status: 'completed',
+      isConfirmed: true,
+      isDelivered: true,
+      isPaid: true,
+    },
+  ];
+  const refDate = new Date('2026-11-28T15:00:00');
+
+  // Selecting parent category 'cat-vpp' includes child category 'cat-pen' & prorates 10% discount (50,000 * 0.9 = 45,000)
+  const vppChart = buildRevenueChartData(orders, {
+    mode: 'day',
+    referenceDate: refDate,
+    categoryIds: ['cat-vpp'],
+    products,
+    categories,
+  });
+  assert.equal(vppChart.totalRevenue, 45000);
+  assert.equal(vppChart.totalOrders, 1);
+  assert.equal(vppChart.matchedQuantity, 10);
+
+  // Selecting specific product 'prod-toy' returns 50,000 * 0.9 = 45,000
+  const toyChart = buildRevenueChartData(orders, {
+    mode: 'day',
+    referenceDate: refDate,
+    productIds: ['prod-toy'],
+    products,
+    categories,
+  });
+  assert.equal(toyChart.totalRevenue, 45000);
+  assert.equal(toyChart.matchedQuantity, 1);
+
+  // Combined category + non-matching product narrows to 0
+  const mismatchChart = buildRevenueChartData(orders, {
+    mode: 'day',
+    referenceDate: refDate,
+    categoryIds: ['cat-vpp'],
+    productIds: ['prod-toy'],
+    products,
+    categories,
+  });
+  assert.equal(mismatchChart.totalRevenue, 0);
+  assert.equal(mismatchChart.totalOrders, 0);
+  assert.equal(mismatchChart.matchedQuantity, 0);
+});
+
+test('order date presets, staff 7-day cap, newest-first sorting, and date range filtering work properly', () => {
+  const refDate = new Date(2026, 10, 28, 14, 30, 0); // 28/11/2026
+  const preset = getOrderDefaultDateRangePreset(refDate);
+  assert.equal(preset.from, '2026-11-25T00:00');
+  assert.equal(preset.to, '2026-11-28T23:59');
+
+  const staffMin = getStaffMinOrderDateTime(refDate);
+  assert.equal(staffMin, '2026-11-21T00:00');
+  assert.equal(
+    clampOrderFromDateForRole('2026-11-01T00:00', 'staff', refDate),
+    '2026-11-21T00:00',
+  );
+  assert.equal(
+    clampOrderFromDateForRole('2026-11-24T08:00', 'staff', refDate),
+    '2026-11-24T08:00',
+  );
+  assert.equal(
+    clampOrderFromDateForRole('2026-11-01T00:00', 'manager', refDate),
+    '2026-11-01T00:00',
+  );
+
+  const makeOrder = (code: string, iso: string): OrderRecord => ({
+    orderCode: code,
+    createdAt: '',
+    createdAtIso: iso,
+    customerName: 'Khách',
+    phone: '0900000000',
+    address: '',
+    note: '',
+    deliveryMethod: 'pickup',
+    paymentMethod: 'transfer',
+    items: [],
+    subtotal: 10000,
+    shippingFee: 0,
+    total: 10000,
+    status: 'pending',
+    isConfirmed: false,
+    isDelivered: false,
+    isPaid: false,
+  });
+
+  const orders = [
+    makeOrder('DH-OLD-10', '2026-11-10T09:00:00'),
+    makeOrder('DH-MID-22', '2026-11-22T12:00:00'),
+    makeOrder('DH-NEW-28', '2026-11-28T09:30:00'),
+  ];
+
+  // Manager sees full requested range sorted newest -> oldest
+  const managerFiltered = filterOrders(orders, {
+    query: '',
+    confirmFilter: 'all',
+    payFilter: 'all',
+    dateFrom: '2026-11-01T00:00',
+    dateTo: '2026-11-28T23:59',
+    userRole: 'manager',
+    referenceDate: refDate,
+  });
+  assert.deepEqual(
+    managerFiltered.map((o) => o.orderCode),
+    ['DH-NEW-28', 'DH-MID-22', 'DH-OLD-10'],
+  );
+
+  // Staff cannot query earlier than 7 days before referenceDate even if dateFrom asks for Nov 1
+  const staffFiltered = filterOrders(orders, {
+    query: '',
+    confirmFilter: 'all',
+    payFilter: 'all',
+    dateFrom: '2026-11-01T00:00',
+    dateTo: '2026-11-28T23:59',
+    userRole: 'staff',
+    referenceDate: refDate,
+  });
+  assert.deepEqual(
+    staffFiltered.map((o) => o.orderCode),
+    ['DH-NEW-28', 'DH-MID-22'],
+  );
+});
+
+test('mapSupabaseSupplierRow and mapSupabasePurchaseOrderRow map supplier fields cleanly', () => {
+  const supplier = mapSupabaseSupplierRow({
+    id: 'sup-001',
+    name: 'NPP Thiên Long Hà Nội',
+    phone: '0988777666',
+    address: 'KCN Bắc Thăng Long',
+    notes: 'Giao sáng T3-T5',
+  });
+  assert.deepEqual(supplier, {
+    id: 'sup-001',
+    name: 'NPP Thiên Long Hà Nội',
+    shortName: null,
+    taxCode: null,
+    phone: '0988777666',
+    address: 'KCN Bắc Thăng Long',
+    area: null,
+    paymentTerms: null,
+    bankAccount: null,
+    bankName: null,
+    email: null,
+    supplyCategory: null,
+    notes: 'Giao sáng T3-T5',
+    createdAt: undefined,
+    updatedAt: undefined,
+  });
+
+  const fullSupplier = mapSupabaseSupplierRow({
+    id: 'sup-002',
+    name: 'Tổng kho Hồng Hà',
+    short_name: 'HH',
+    tax_code: '0101234567',
+    phone: '0911222333',
+    address: 'Hai Bà Trưng, Hà Nội',
+    bank_account: '190399998888',
+    bank_name: 'Techcombank - CN Hà Nội',
+    email: 'sales@hongha.vn',
+    supply_category: 'Vở học sinh, Bút viết',
+    notes: 'Chiết khấu 5%',
+  });
+  assert.equal(fullSupplier.shortName, 'HH');
+  assert.equal(fullSupplier.taxCode, '0101234567');
+  assert.equal(fullSupplier.bankAccount, '190399998888');
+  assert.equal(fullSupplier.bankName, 'Techcombank - CN Hà Nội');
+  assert.equal(fullSupplier.email, 'sales@hongha.vn');
+  assert.equal(fullSupplier.supplyCategory, 'Vở học sinh, Bút viết');
+
+  const po = mapSupabasePurchaseOrderRow(
+    {
+      id: 'po-001',
+      po_code: 'NH-1128-HH',
+      supplier_id: 'sup-002',
+      supplier_name: 'Tổng kho Hồng Hà',
+      note: 'Đợt tháng 11',
+      total_amount: 1200000,
+      item_count: 1,
+      created_by_email: 'admin@shop.vn',
+    },
+    [],
+  );
+  assert.equal(po.supplierId, 'sup-002');
+  assert.equal(po.supplierName, 'Tổng kho Hồng Hà');
+});
+
+test('encodeRfc4648Base32, generateOrderCode, getNextDailyOrderSequence, and generatePurchaseCode follow exact spec', () => {
+  assert.equal(encodeRfc4648Base32(0, 2), 'AA');
+  assert.equal(encodeRfc4648Base32(1, 2), 'AB');
+  assert.equal(encodeRfc4648Base32(31, 2), 'A7');
+  assert.equal(encodeRfc4648Base32(32, 2), 'BA');
+  assert.equal(encodeRfc4648Base32(1023, 2), '77');
+  assert.equal(encodeRfc4648Base32(1024, 2), 'BAA');
+
+  assert.equal(decodeRfc4648Base32('AB'), 1);
+  assert.equal(decodeRfc4648Base32('77'), 1023);
+  assert.equal(decodeRfc4648Base32('BAA'), 1024);
+
+  const now = new Date(2026, 10, 28, 9, 5, 0); // 28/11/2026 09:05
+  assert.equal(generateOrderCode(now, 1), 'DH-1128-0905-AB');
+  assert.equal(generateOrderCode(now, 1024), 'DH-1128-0905-BAA');
+
+  const existingOrders: Array<Pick<OrderRecord, 'createdAtIso' | 'createdAt' | 'orderCode'>> = [
+    { orderCode: 'DH-1128-0815-AB', createdAt: '28/11/2026, 08:15', createdAtIso: '2026-11-28T08:15:00' },
+    { orderCode: 'DH-1128-0840-AD', createdAt: '28/11/2026, 08:40', createdAtIso: '2026-11-28T08:40:00' },
+    { orderCode: 'DH-1127-2000-ZZ', createdAt: '27/11/2026, 20:00', createdAtIso: '2026-11-27T20:00:00' },
+  ];
+  // Max daily seq on 28/11 is AD (= 3), so next sequence is 4 -> AE
+  assert.equal(getNextDailyOrderSequence(existingOrders, now), 4);
+  assert.equal(
+    getNextDailyOrderSequence(existingOrders, now, ['DH-1128-0901-AE']),
+    5,
+  );
+
+  // Purchase order code NH-[MM][DD]-[SHORTNAME]
+  assert.equal(generatePurchaseCode(now, 'Hồng Hà', []), 'NH-1128-HONGHA');
+  assert.equal(generatePurchaseCode(now, 'HH', []), 'NH-1128-HH');
+  assert.equal(generatePurchaseCode(now, null, []), 'NH-1128-NCC');
+  assert.equal(
+    generatePurchaseCode(now, 'HH', ['NH-1128-HH']),
+    'NH-1128-HH-2',
+  );
+});
+
+test('getLatestProductImportCostMap and buildNeedImportCandidates compute latest discounted import price and suggestions', () => {
+  const productsForNeed: Product[] = [
+    {
+      id: 'prod-1',
+      sku: 'BUT-01',
+      barcode: '8930001',
+      name: 'Bút bi xanh',
+      category: 'Bút',
+      categoryLabel: 'Bút',
+      price: 5000,
+      costPrice: 3500, // stale costPrice
+      unit: 'Cây',
+      baseUnit: 'Cây',
+      stock: 4,
+      orderedQuantity: 2, // netAvailable = 2 < minStock(5) => below-min!
+      minStock: 5,
+      maxStock: 20,
+      popularRank: 1,
+      variants: ['Tiêu chuẩn'],
+      image: '',
+      description: '',
+    },
+    {
+      id: 'prod-2',
+      sku: 'VO-01',
+      barcode: '8930002',
+      name: 'Vở 96 trang',
+      category: 'Vở',
+      categoryLabel: 'Vở',
+      price: 9000,
+      costPrice: 6000,
+      unit: 'Quyển',
+      baseUnit: 'Quyển',
+      stock: 0,
+      orderedQuantity: 0,
+      minStock: null,
+      maxStock: null,
+      popularRank: 2,
+      variants: ['Tiêu chuẩn'],
+      image: '',
+      description: '',
+    },
+    {
+      id: 'prod-3',
+      sku: 'THUOC-01',
+      barcode: '8930003',
+      name: 'Thước kẻ 20cm',
+      category: 'Thước',
+      categoryLabel: 'Thước',
+      price: 4000,
+      costPrice: 2000,
+      unit: 'Cái',
+      baseUnit: 'Cái',
+      stock: 3,
+      orderedQuantity: 0,
+      minStock: null,
+      maxStock: null,
+      popularRank: 3,
+      variants: ['Tiêu chuẩn'],
+      image: '',
+      description: '',
+    },
+  ];
+
+  const poHistory: PurchaseOrderRecord[] = [
+    {
+      id: 'po-old',
+      poCode: 'NH-1120-HH',
+      supplierName: 'Hồng Hà',
+      note: '',
+      totalAmount: 30000,
+      itemCount: 1,
+      importedAt: '20/11/2026',
+      importedAtIso: '2026-11-20T09:00:00',
+      createdByEmail: 'admin@huonglong.vn',
+      items: [
+        {
+          productId: 'prod-1',
+          sku: 'BUT-01',
+          productName: 'Bút bi xanh',
+          unitLabel: 'Cây',
+          conversionFactor: 1,
+          quantity: 10,
+          unitCost: 3500,
+          discountPercent: 0,
+          discountAmount: 0,
+          netUnitCost: 3500,
+          lineTotal: 35000,
+        },
+      ],
+    },
+    {
+      id: 'po-new',
+      poCode: 'NH-1127-HH',
+      supplierName: 'Hồng Hà',
+      note: '',
+      totalAmount: 54000,
+      itemCount: 1,
+      importedAt: '27/11/2026',
+      importedAtIso: '2026-11-27T14:00:00',
+      createdByEmail: 'admin@huonglong.vn',
+      items: [
+        {
+          productId: 'prod-1',
+          sku: 'BUT-01',
+          productName: 'Bút bi xanh',
+          unitLabel: 'Hộp',
+          conversionFactor: 10,
+          quantity: 2,
+          unitCost: 30000,
+          discountPercent: 10,
+          discountAmount: 3000,
+          netUnitCost: 27000, // 2,700đ per base unit
+          lineTotal: 54000,
+        },
+      ],
+    },
+  ];
+
+  const costMap = getLatestProductImportCostMap(poHistory, productsForNeed);
+  assert.equal(costMap.get('prod-1'), 2700);
+  assert.equal(costMap.get('prod-2'), 6000);
+
+  // Default: only below-min (prod-1: netAvailable 2 < 5, suggestedQty = 20 - 2 = 18)
+  const defaultCandidates = buildNeedImportCandidates({
+    products: productsForNeed,
+    purchaseOrders: poHistory,
+  });
+  assert.equal(defaultCandidates.length, 1);
+  assert.equal(defaultCandidates[0].product.id, 'prod-1');
+  assert.equal(defaultCandidates[0].suggestedQty, 18);
+  assert.equal(defaultCandidates[0].lastImportPrice, 2700);
+
+  // Include out-of-stock adds prod-2 (stock <= 0)
+  const withOutOfStock = buildNeedImportCandidates({
+    products: productsForNeed,
+    purchaseOrders: poHistory,
+    includeOutOfStock: true,
+  });
+  assert.deepEqual(
+    withOutOfStock.map((c) => c.product.id),
+    ['prod-1', 'prod-2'],
+  );
+
+  // Manual threshold <= 3 adds prod-3 as well
+  const withManualThreshold = buildNeedImportCandidates({
+    products: productsForNeed,
+    purchaseOrders: poHistory,
+    includeOutOfStock: true,
+    manualStockThreshold: 3,
+  });
+  assert.deepEqual(
+    withManualThreshold.map((c) => c.product.id),
+    ['prod-1', 'prod-2', 'prod-3'],
+  );
+});
+
+test('buildNeedImportExportRows and parsePurchaseImportWorkbook export exact columns and parse CSV/XLSX', () => {
+  const rows = buildNeedImportExportRows([
+    {
+      sku: 'BUT-01',
+      barcode: '8930001',
+      name: 'Bút bi xanh',
+      quantity: 18,
+      lastImportPrice: 2700,
+    },
+  ]);
+  assert.deepEqual(rows, [
+    {
+      'Số thứ tự': 1,
+      'Mã hàng': 'BUT-01',
+      'Mã vạch': '8930001',
+      'Tên hàng': 'Bút bi xanh',
+      'Số lượng cần nhập': 18,
+      'Giá nhập lần trước': 2700,
+      'Thành tiền': 48600,
+    },
+  ]);
+
+  const csvContent =
+    '\uFEFFSố thứ tự,Mã hàng,Mã vạch,Tên hàng,Số lượng cần nhập,Giá nhập lần trước,Thành tiền\n' +
+    '1,VPP-001,,Bút bi gel,10,5000,50000\n' +
+    '2,NEW-999,8939999,Bút xóa mới,5,12000,60000\n';
+  const csvResult = parsePurchaseImportWorkbook(
+    csvContent,
+    'phieu-nhap.csv',
+    sampleProducts,
+  );
+  assert.equal(csvResult.errorMessage, undefined);
+  assert.equal(csvResult.items.length, 2);
+  assert.equal(csvResult.matchedCount, 1);
+  assert.equal(csvResult.newProductCount, 1);
+  assert.equal(csvResult.items[0].productId, 'p1');
+  assert.equal(csvResult.items[0].lineTotal, 50000);
+  assert.equal(csvResult.items[1].isNewProduct, true);
+  assert.equal(csvResult.items[1].sku, 'NEW-999');
+
+  // Test actual .xlsx binary buffer parsing
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'NhapHang');
+  const xlsxBuf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+  const xlsxResult = parsePurchaseImportWorkbook(
+    xlsxBuf,
+    'nhap-hang.xlsx',
+    sampleProducts,
+  );
+  assert.equal(xlsxResult.errorMessage, undefined);
+  assert.equal(xlsxResult.items.length, 1);
+  assert.equal(xlsxResult.items[0].sku, 'BUT-01');
+  assert.equal(xlsxResult.items[0].quantity, 18);
+  assert.equal(xlsxResult.items[0].unitCost, 2700);
+});
+
+test('parseNullableStockBound and formatStockBoundInput handle empty, negative, and valid bounds cleanly', () => {
+  assert.equal(parseNullableStockBound(''), null);
+  assert.equal(parseNullableStockBound('   '), null);
+  assert.equal(parseNullableStockBound('abc'), null);
+  assert.equal(parseNullableStockBound('-5'), 0);
+  assert.equal(parseNullableStockBound('0'), 0);
+  assert.equal(parseNullableStockBound('12'), 12);
+  assert.equal(parseNullableStockBound('12.567'), 12.57);
+
+  assert.equal(formatStockBoundInput(null), '');
+  assert.equal(formatStockBoundInput(undefined), '');
+  assert.equal(formatStockBoundInput(0), '0');
+  assert.equal(formatStockBoundInput(15), '15');
+});
+
+test('extra fees normalization, POS totals, and Purchase Order summary include extra fees cleanly', () => {
+  const normalized = normalizeExtraFees([
+    { label: ' Giao hàng ', amount: 15000 },
+    { label: '', amount: 5000 },
+    { label: 'Gửi xe', amount: -200 },
+    { label: 'Đóng gói', amount: 10000 },
+  ]);
+  assert.deepEqual(normalized, [
+    { label: 'Giao hàng', amount: 15000 },
+    { label: 'Phụ phí khác', amount: 5000 },
+    { label: 'Gửi xe', amount: 0 },
+    { label: 'Đóng gói', amount: 10000 },
+  ]);
+  assert.equal(sumExtraFees(normalized), 30000);
+
+  const posTotals = calculatePosOrderTotals(
+    [
+      {
+        productId: 'p1',
+        sku: 'VPP-01',
+        name: 'Vở',
+        categoryLabel: 'Vở',
+        unit: 'Quyển',
+        variant: 'Tiêu chuẩn',
+        unitPrice: 10000,
+        quantity: 5,
+        image: '',
+      },
+    ],
+    5000,
+    [
+      { label: 'Giao hàng', amount: 15000 },
+      { label: 'Chờ đợi', amount: 10000 },
+    ],
+  );
+  assert.equal(posTotals.subtotal, 50000);
+  assert.equal(posTotals.discountAmount, 5000);
+  assert.equal(posTotals.extraFeeTotal, 25000);
+  assert.equal(posTotals.total, 70000);
+
+  const blankTab = createNewPosTab(1, new Date(2026, 10, 28, 10, 0, 0), 1);
+  const loadedFromOrder = openOrderInPosTabs([blankTab], blankTab.id, {
+    id: 'ord-1',
+    orderCode: 'DH-1128-0900-AB',
+    createdAt: '28/11/2026',
+    customerName: 'Anh Nam',
+    phone: '0911222333',
+    address: 'CT1',
+    note: '',
+    deliveryMethod: 'delivery',
+    paymentMethod: 'cod',
+    items: [
+      {
+        productId: 'p1',
+        sku: 'VPP-01',
+        name: 'Vở',
+        categoryLabel: 'Vở',
+        unit: 'Quyển',
+        variant: 'Tiêu chuẩn',
+        unitPrice: 10000,
+        quantity: 2,
+        image: '',
+      },
+    ],
+    subtotal: 20000,
+    shippingFee: 0,
+    extraFees: [{ label: 'Gửi xe', amount: 5000 }],
+    extraFeeTotal: 5000,
+    total: 25000,
+    isConfirmed: false,
+    isDelivered: false,
+    isPaid: false,
+  });
+  assert.deepEqual(loadedFromOrder.tabs[0].extraFees, [
+    { label: 'Gửi xe', amount: 5000 },
+  ]);
+
+  const poSummary = calculatePurchaseSummary(
+    [
+      {
+        productId: 'p1',
+        sku: 'VPP-01',
+        productName: 'Vở',
+        unitLabel: 'Quyển',
+        conversionFactor: 1,
+        quantity: 10,
+        unitCost: 8000,
+        discountPercent: 0,
+        discountAmount: 0,
+        netUnitCost: 8000,
+        lineTotal: 80000,
+      },
+    ],
+    [{ label: 'Bốc xếp & Gửi xe', amount: 20000 }],
+  );
+  assert.equal(poSummary.itemsTotal, 80000);
+  assert.equal(poSummary.extraFeeTotal, 20000);
+  assert.equal(poSummary.totalAmount, 100000);
+});
+
+test('customer merge preview, debt maps, cashbook summary, voucher codes, and row mappers work accurately', () => {
+  const c1: CustomerRecord = {
+    id: 'c1',
+    phone: '0911111111',
+    fullName: 'Trường Tiểu học A',
+    defaultAddress: '',
+    area: 'Cổ Nhuế',
+    customerGroup: 'Cơ quan - Trường học',
+    taxCode: '0109999999',
+    bankAccount: '',
+    bankName: '',
+    email: '',
+    creditLimit: 500000,
+    notes: 'Xuất hóa đơn cuối tháng',
+    totalOrders: 5,
+    totalSpent: 800000,
+    lastOrderAt: '28/11/2026',
+  };
+  const c2: CustomerRecord = {
+    id: 'c2',
+    phone: '0922222222',
+    fullName: 'Cô Lan - Tiểu học A',
+    defaultAddress: 'Phòng Kế toán',
+    area: '',
+    customerGroup: 'Khách lẻ',
+    taxCode: '',
+    bankAccount: '190300001111',
+    bankName: 'Techcombank',
+    email: 'ketoan@tieuhoca.edu.vn',
+    creditLimit: 1000000,
+    notes: 'Giao giờ hành chính',
+    totalOrders: 2,
+    totalSpent: 200000,
+    lastOrderAt: '20/11/2026',
+  };
+  const merged = buildMergedCustomerPreview([c1, c2], 'c1');
+  assert.ok(merged);
+  assert.equal(merged.primaryId, 'c1');
+  assert.deepEqual(merged.duplicateIds, ['c2']);
+  assert.equal(merged.phone, '0911111111');
+  assert.equal(merged.defaultAddress, 'Phòng Kế toán');
+  assert.equal(merged.bankAccount, '190300001111');
+  assert.equal(merged.email, 'ketoan@tieuhoca.edu.vn');
+  assert.equal(merged.creditLimit, 1000000);
+  assert.equal(merged.combinedOrdersCount, 7);
+  assert.equal(merged.combinedTotalSpent, 1000000);
+  assert.equal(
+    merged.notes,
+    'Xuất hóa đơn cuối tháng | Giao giờ hành chính',
+  );
+
+  const ordersForDebt: OrderRecord[] = [
+    {
+      id: 'o1',
+      orderCode: 'DH-1128-0900-AB',
+      customerId: 'c1',
+      createdAt: '28/11/2026',
+      customerName: 'Trường A',
+      phone: '0911111111',
+      address: 'CT1',
+      note: '',
+      deliveryMethod: 'delivery',
+      paymentMethod: 'transfer',
+      items: [],
+      subtotal: 700000,
+      shippingFee: 0,
+      paidAmount: 100000,
+      total: 700000,
+      status: 'confirmed',
+      isConfirmed: true,
+      isDelivered: false,
+      isPaid: false,
+    },
+    {
+      id: 'o2',
+      orderCode: 'DH-1128-0910-AC',
+      customerId: 'c2',
+      createdAt: '28/11/2026',
+      customerName: 'Cô Lan',
+      phone: '0922222222',
+      address: 'CT1',
+      note: '',
+      deliveryMethod: 'pickup',
+      paymentMethod: 'cod',
+      items: [],
+      subtotal: 200000,
+      shippingFee: 0,
+      paidAmount: 200000,
+      total: 200000,
+      status: 'completed',
+      isConfirmed: true,
+      isDelivered: true,
+      isPaid: true,
+    },
+  ];
+  const custDebtMap = calculateCustomerDebtMap(ordersForDebt, [c1, c2]);
+  assert.equal(custDebtMap.get('c1')?.debtAmount, 600000);
+  assert.equal(custDebtMap.get('c1')?.overCreditLimit, true);
+  assert.equal(custDebtMap.get('c2')?.debtAmount, 0);
+
+  const suppliersForDebt: SupplierRecord[] = [
+    {
+      id: 's1',
+      name: 'Hồng Hà',
+      phone: '0988',
+      address: 'HN',
+      notes: '',
+    },
+  ];
+  const poForDebt: PurchaseOrderRecord[] = [
+    {
+      id: 'po1',
+      poCode: 'NH-1128-HH',
+      supplierId: 's1',
+      supplierName: 'Hồng Hà',
+      note: '',
+      extraFeeTotal: 30000,
+      paidAmount: 400000,
+      isPaid: false,
+      totalAmount: 1000000,
+      itemCount: 1,
+      createdByEmail: 'admin@shop.vn',
+      importedAt: '28/11/2026',
+      items: [],
+    },
+  ];
+  const supDebtMap = calculateSupplierDebtMap(poForDebt, suppliersForDebt);
+  assert.equal(supDebtMap.get('s1')?.debtAmount, 600000);
+  assert.equal(supDebtMap.get('s1')?.unpaidPoCount, 1);
+
+  const vouchers: CashVoucherRecord[] = [
+    {
+      id: 'v1',
+      voucherCode: 'PT-1128-01',
+      voucherType: 'receipt',
+      category: 'customer_debt',
+      amount: 100000,
+      paymentMethod: 'cash',
+      relatedCode: 'DH-1128-0900-AB',
+      counterpartyName: 'Trường A',
+      note: '',
+      voucherDate: '28/11/2026',
+      createdByEmail: 'admin@shop.vn',
+    },
+    {
+      id: 'v2',
+      voucherCode: 'PC-1128-01',
+      voucherType: 'payment',
+      category: 'operating_expense',
+      amount: 50000,
+      paymentMethod: 'cash',
+      relatedCode: '',
+      counterpartyName: 'Tiền gửi xe',
+      note: '',
+      voucherDate: '28/11/2026',
+      createdByEmail: 'admin@shop.vn',
+    },
+  ];
+
+  const summary = calculateCashbookSummary(ordersForDebt, poForDebt, vouchers);
+  assert.equal(summary.totalReceipts, 100000);
+  assert.equal(summary.totalPayments, 50000);
+  assert.equal(summary.netCashflow, 50000);
+  assert.equal(summary.totalReceivable, 600000);
+  assert.equal(summary.totalPayable, 600000);
+  assert.equal(summary.operatingAndExtraExpenses, 80000); // 50k operating + 30k PO extra fee
+
+  const now = new Date(2026, 10, 28, 10, 0, 0);
+  assert.equal(generateVoucherCode('receipt', now, ['PT-1128-01']), 'PT-1128-02');
+  assert.equal(generateVoucherCode('payment', now, []), 'PC-1128-01');
+  assert.deepEqual(
+    getAllowedVoucherCategoriesForRole('staff', 'payment'),
+    ['customer_refund'],
+  );
+
+  const mappedOrder = mapSupabaseOrderRow({
+    id: 'ord-mapped',
+    order_code: 'DH-1128-1000-AB',
+    customer_name: 'Anh Minh',
+    customer_phone: '0912345678',
+    shipping_address: 'CT2',
+    subtotal_amount: 100000,
+    extra_fees: [{ label: 'Giao hàng', amount: 15000 }],
+    extra_fee_total: 15000,
+    paid_amount: 50000,
+    total_amount: 115000,
+    is_paid: false,
+  });
+  assert.equal(mappedOrder.extraFeeTotal, 15000);
+  assert.equal(mappedOrder.paidAmount, 50000);
+  assert.deepEqual(mappedOrder.extraFees, [{ label: 'Giao hàng', amount: 15000 }]);
+
+  const mappedVoucher = mapSupabaseCashVoucherRow({
+    id: 'cv-1',
+    voucher_code: 'PT-1128-01',
+    voucher_type: 'receipt',
+    category: 'customer_debt',
+    amount: 250000,
+    payment_method: 'transfer',
+    customer_id: 'c1',
+    order_id: 'ord-mapped',
+    related_code: 'DH-1128-1000-AB',
+    counterparty_name: 'Anh Minh',
+    note: 'Thu nợ đợt 1',
+  });
+  assert.equal(mappedVoucher.voucherCode, 'PT-1128-01');
+  assert.equal(mappedVoucher.voucherType, 'receipt');
+  assert.equal(mappedVoucher.amount, 250000);
+  assert.equal(mappedVoucher.customerId, 'c1');
 });
 
 

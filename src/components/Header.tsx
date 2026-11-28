@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu, ShoppingBag, X } from 'lucide-react';
+import { Menu, PlusSquare, ShoppingBag, X } from 'lucide-react';
 import type { CategoryId } from '../types/shop';
 import { formatVnd } from '../utils/shopLogic';
 
@@ -12,6 +12,8 @@ interface HeaderProps {
   onSelectNavCategory: (category: CategoryId) => void;
   onNavigateShop: () => void;
   onOpenAdminPortal?: () => void;
+  onOpenPurchases?: () => void;
+  onOpenPos?: () => void;
 }
 
 export function Header({
@@ -23,6 +25,8 @@ export function Header({
   onSelectNavCategory,
   onNavigateShop,
   onOpenAdminPortal,
+  onOpenPurchases,
+  onOpenPos,
 }: HeaderProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -66,32 +70,48 @@ export function Header({
         </nav>
 
         <div className="flex items-center gap-2.5 shrink-0">
-          {isAuthenticated && onOpenAdminPortal && (
+          {isAuthenticated && (onOpenPurchases || onOpenAdminPortal) && (
             <a
-              href="#/admin"
+              href={onOpenPurchases ? '#/admin/purchases' : '#/admin'}
               onClick={(e) => {
                 e.preventDefault();
-                onOpenAdminPortal();
+                if (onOpenPurchases) {
+                  onOpenPurchases();
+                } else {
+                  onOpenAdminPortal?.();
+                }
               }}
               className="hidden md:inline-flex items-center px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
-              Trang quản lý
+              {onOpenPurchases ? 'Nhập hàng' : 'Trang quản lý'}
             </a>
           )}
 
-          <button
-            type="button"
-            onClick={onOpenCart}
-            aria-label={`Mở giỏ hàng, hiện có ${cartCount} sản phẩm`}
-            className="hidden md:inline-flex items-center gap-2.5 px-4 py-2 text-sm font-medium text-white bg-blue-700 hover:bg-blue-800 active:scale-[0.99] rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 cursor-pointer"
-          >
-            <ShoppingBag className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span className="tabular-nums">
-              {cartCount > 0
-                ? `Giỏ hàng (${cartCount}) · ${formatVnd(cartSubtotal)}`
-                : 'Giỏ hàng (0)'}
-            </span>
-          </button>
+          {isAuthenticated ? (
+            <button
+              type="button"
+              onClick={() => (onOpenPos ? onOpenPos() : onOpenAdminPortal?.())}
+              aria-label="Mở giao diện bán hàng nhiều tab"
+              className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 active:scale-[0.99] rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 cursor-pointer"
+            >
+              <PlusSquare className="w-4 h-4 shrink-0" aria-hidden="true" />
+              <span>Bán hàng</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenCart}
+              aria-label={`Mở giỏ hàng, hiện có ${cartCount} sản phẩm`}
+              className="hidden md:inline-flex items-center gap-2.5 px-4 py-2 text-sm font-medium text-white bg-blue-700 hover:bg-blue-800 active:scale-[0.99] rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 cursor-pointer"
+            >
+              <ShoppingBag className="w-4 h-4 shrink-0" aria-hidden="true" />
+              <span className="tabular-nums">
+                {cartCount > 0
+                  ? `Giỏ hàng (${cartCount}) · ${formatVnd(cartSubtotal)}`
+                  : 'Giỏ hàng (0)'}
+              </span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -133,19 +153,38 @@ export function Header({
                 </a>
               </li>
             ))}
-            {isAuthenticated && onOpenAdminPortal && (
+            {isAuthenticated && onOpenPos && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileMenuOpen(false);
+                    onOpenPos();
+                  }}
+                  className="w-full flex items-center justify-between min-h-[44px] py-2.5 text-sm font-semibold text-blue-700 hover:text-blue-800 rounded-md transition-colors cursor-pointer"
+                >
+                  <span>Bán hàng (nhiều tab)</span>
+                  <span className="text-xs text-blue-500">Mở POS</span>
+                </button>
+              </li>
+            )}
+            {isAuthenticated && (onOpenPurchases || onOpenAdminPortal) && (
               <li>
                 <a
-                  href="#/admin"
+                  href={onOpenPurchases ? '#/admin/purchases' : '#/admin'}
                   onClick={(e) => {
                     e.preventDefault();
                     setIsMobileMenuOpen(false);
-                    onOpenAdminPortal();
+                    if (onOpenPurchases) {
+                      onOpenPurchases();
+                    } else {
+                      onOpenAdminPortal?.();
+                    }
                   }}
-                  className="flex items-center justify-between min-h-[44px] py-2.5 text-sm font-semibold text-blue-700 hover:text-blue-800 rounded-md transition-colors"
+                  className="flex items-center justify-between min-h-[44px] py-2.5 text-sm font-semibold text-slate-700 hover:text-blue-800 rounded-md transition-colors"
                 >
-                  <span>Trang quản lý</span>
-                  <span className="text-xs text-blue-500">Mở</span>
+                  <span>{onOpenPurchases ? 'Nhập hàng' : 'Trang quản lý'}</span>
+                  <span className="text-xs text-slate-500">Mở</span>
                 </a>
               </li>
             )}

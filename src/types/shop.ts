@@ -22,6 +22,11 @@ export interface CategoryNode {
   isActive: boolean;
 }
 
+export interface PurchasePackOption {
+  label: string;
+  factor: number;
+}
+
 export interface Product {
   id: string;
   sku: string;
@@ -38,8 +43,10 @@ export interface Product {
   baseUnit?: string;
   conversionRate?: number;
   stock: number;
-  minStock?: number;
-  maxStock?: number;
+  orderedQuantity?: number;
+  purchasePackOptions?: PurchasePackOption[];
+  minStock?: number | null;
+  maxStock?: number | null;
   popularRank: number;
   variants: string[];
   image: string;
@@ -78,6 +85,11 @@ export interface CheckoutErrors {
   address?: string;
 }
 
+export interface ExtraFeeItem {
+  label: string;
+  amount: number;
+}
+
 export interface OrderRecord {
   id?: string;
   orderCode: string;
@@ -94,11 +106,16 @@ export interface OrderRecord {
   subtotal: number;
   discountAmount?: number;
   shippingFee: number;
+  extraFees?: ExtraFeeItem[];
+  extraFeeTotal?: number;
+  paidAmount?: number;
   total: number;
   status?: OrderLifecycleStatus;
   isConfirmed: boolean;
+  isDelivered: boolean;
   isPaid: boolean;
   confirmedAt?: string | null;
+  deliveredAt?: string | null;
   paidAt?: string | null;
   syncedToSupabase?: boolean;
 }
@@ -107,6 +124,8 @@ export interface PosDraftTab {
   id: string;
   label: string;
   orderCode: string;
+  sourceOrderId?: string | null;
+  sourceOrderCode?: string | null;
   items: CartItem[];
   customerId?: string | null;
   customerName: string;
@@ -117,6 +136,10 @@ export interface PosDraftTab {
   paymentMethod: PaymentMethod;
   discountPercent: number;
   discountAmount: number;
+  extraFees?: ExtraFeeItem[];
+  isConfirmed?: boolean;
+  isDelivered?: boolean;
+  isPaid?: boolean;
   createdAtIso: string;
 }
 
@@ -127,6 +150,7 @@ export type AdminTab =
   | 'customers'
   | 'products'
   | 'purchases'
+  | 'cashbook'
   | 'users';
 
 export interface AdminUser {
@@ -183,19 +207,53 @@ export interface RevenueChartSummary {
   totalOrders: number;
   averageOrderValue: number;
   maxBucketRevenue: number;
+  matchedQuantity?: number;
   customRangeInvalid?: boolean;
 }
+
+export type ProductStockFilter = 'all' | 'below-min' | 'out-of-stock';
+
+export type CustomerGroup =
+  | 'Khách lẻ'
+  | 'Cơ quan - Trường học'
+  | 'Khách sỉ'
+  | string;
 
 export interface CustomerRecord {
   id: string;
   phone: string;
   fullName: string;
   defaultAddress: string;
+  area?: string | null;
+  customerGroup?: CustomerGroup | null;
+  taxCode?: string | null;
+  bankAccount?: string | null;
+  bankName?: string | null;
+  email?: string | null;
+  creditLimit?: number | null;
   notes: string;
   totalOrders: number;
   totalSpent: number;
   lastOrderAt: string;
   lastOrderAtIso?: string;
+}
+
+export interface SupplierRecord {
+  id: string;
+  name: string;
+  shortName?: string | null;
+  taxCode?: string | null;
+  phone: string;
+  address: string;
+  area?: string | null;
+  paymentTerms?: string | null;
+  bankAccount?: string | null;
+  bankName?: string | null;
+  email?: string | null;
+  supplyCategory?: string | null;
+  notes: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface PurchaseOrderItem {
@@ -225,12 +283,111 @@ export interface PurchaseOrderItem {
 export interface PurchaseOrderRecord {
   id?: string;
   poCode: string;
+  supplierId?: string | null;
   supplierName: string;
   note: string;
+  extraFees?: ExtraFeeItem[];
+  extraFeeTotal?: number;
+  paidAmount?: number;
+  isPaid?: boolean;
   totalAmount: number;
   itemCount: number;
   createdByEmail: string;
   importedAt: string;
   importedAtIso?: string;
   items: PurchaseOrderItem[];
+}
+
+export type CashVoucherType = 'receipt' | 'payment';
+
+export type CashVoucherCategory =
+  | 'customer_debt'
+  | 'sales_income'
+  | 'supplier_refund'
+  | 'other_income'
+  | 'supplier_debt'
+  | 'purchase_expense'
+  | 'shipping_fee'
+  | 'operating_expense'
+  | 'customer_refund'
+  | 'other_expense';
+
+export type CashVoucherPaymentMethod = 'cash' | 'transfer' | 'cod';
+
+export interface CashVoucherRecord {
+  id: string;
+  voucherCode: string;
+  voucherType: CashVoucherType;
+  category: CashVoucherCategory;
+  amount: number;
+  paymentMethod: CashVoucherPaymentMethod | string;
+  customerId?: string | null;
+  supplierId?: string | null;
+  orderId?: string | null;
+  purchaseOrderId?: string | null;
+  relatedCode: string;
+  counterpartyName: string;
+  note: string;
+  voucherDate: string;
+  voucherDateIso?: string;
+  createdByEmail: string;
+  createdAt?: string;
+}
+
+export interface QuickVoucherDraft {
+  voucherType: CashVoucherType;
+  category: CashVoucherCategory;
+  amount?: number;
+  paymentMethod?: CashVoucherPaymentMethod;
+  customerId?: string | null;
+  supplierId?: string | null;
+  orderId?: string | null;
+  purchaseOrderId?: string | null;
+  relatedCode?: string;
+  counterpartyName?: string;
+  note?: string;
+}
+
+export interface CustomerDebtSummary {
+  customerId: string;
+  totalOrderAmount: number;
+  totalPaidAmount: number;
+  debtAmount: number;
+  unpaidOrderCount: number;
+  overCreditLimit: boolean;
+}
+
+export interface SupplierDebtSummary {
+  supplierId: string;
+  totalPurchaseAmount: number;
+  totalPaidAmount: number;
+  debtAmount: number;
+  unpaidPoCount: number;
+}
+
+export interface CashbookSummary {
+  totalReceipts: number;
+  totalPayments: number;
+  netCashflow: number;
+  totalReceivable: number;
+  totalPayable: number;
+  operatingAndExtraExpenses: number;
+}
+
+export interface BundlePackItem {
+  productId: string;
+  productName?: string;
+  quantity: number;
+}
+
+export interface BundlePack {
+  id: string;
+  comboCode: string;
+  title: string;
+  subtitle: string;
+  image?: string;
+  discountAmount: number;
+  bundlePrice: number;
+  originalPrice: number;
+  items: BundlePackItem[];
 }

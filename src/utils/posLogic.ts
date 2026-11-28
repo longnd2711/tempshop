@@ -1,5 +1,6 @@
 import type {
   CartItem,
+  ExtraFeeItem,
   OrderRecord,
   PosDraftTab,
   Product,
@@ -8,6 +9,7 @@ import {
   generateOrderCode,
   normalizeVietnameseText,
 } from './shopLogic';
+import { normalizeExtraFees, sumExtraFees } from './adminLogic';
 
 export const POS_TABS_STORAGE_KEY = 'vpp_huong_long_pos_tabs_v1';
 
@@ -32,11 +34,14 @@ export function createPosTabId(now: number = Date.now()): string {
 export function createNewPosTab(
   indexNumber: number = 1,
   now: Date = new Date(),
+  dailySequence: number = indexNumber,
 ): PosDraftTab {
   return {
     id: createPosTabId(now.getTime()),
     label: `Đơn ${indexNumber}`,
-    orderCode: generateOrderCode(now),
+    orderCode: generateOrderCode(now, dailySequence),
+    sourceOrderId: null,
+    sourceOrderCode: null,
     items: [],
     customerId: null,
     customerName: 'Khách lẻ',
@@ -47,7 +52,99 @@ export function createNewPosTab(
     paymentMethod: 'cod',
     discountPercent: 0,
     discountAmount: 0,
+    extraFees: [],
+    isConfirmed: false,
+    isDelivered: false,
+    isPaid: false,
     createdAtIso: now.toISOString(),
+  };
+}
+
+export function isPosTabBlank(tab: PosDraftTab): boolean {
+  return (
+    tab.items.length === 0 &&
+    sumExtraFees(tab.extraFees) === 0 &&
+    !tab.sourceOrderCode &&
+    !tab.sourceOrderId &&
+    !tab.phone.trim() &&
+    !tab.note.trim() &&
+    (tab.customerName.trim() === '' ||
+      tab.customerName.trim().toLowerCase() === 'khách lẻ')
+  );
+}
+
+export function openOrderInPosTabs(
+  tabs: PosDraftTab[],
+  activeTabId: string,
+  order: OrderRecord,
+  now: Date = new Date(),
+): {
+  tabs: PosDraftTab[];
+  activeTabId: string;
+} {
+  const existing = tabs.find(
+    (t) =>
+      (t.sourceOrderCode && t.sourceOrderCode === order.orderCode) ||
+      t.orderCode === order.orderCode,
+  );
+  if (existing) {
+    return {
+      tabs,
+      activeTabId: existing.id,
+    };
+  }
+
+  const subtotal = order.items.reduce(
+    (sum, item) =>
+      sum +
+      Math.max(0, Number(item.unitPrice) || 0) *
+        Math.max(0, Number(item.quantity) || 0),
+    0,
+  );
+  const discountState = syncOrderDiscountFromAmount(
+    subtotal,
+    Number(order.discountAmount ?? 0),
+  );
+
+  const blankActive = tabs.find((t) => t.id === activeTabId && isPosTabBlank(t));
+  const targetId = blankActive ? blankActive.id : createPosTabId(now.getTime());
+
+  const populatedTab: PosDraftTab = {
+    id: targetId,
+    label: order.orderCode,
+    orderCode: order.orderCode,
+    sourceOrderId: order.id ?? null,
+    sourceOrderCode: order.orderCode,
+    items: order.items.map((item) => ({ ...item })),
+    customerId: order.customerId ?? null,
+    customerName: order.customerName || 'Khách lẻ',
+    phone: order.phone || '',
+    address:
+      order.deliveryMethod === 'pickup'
+        ? order.address || 'Tại quầy'
+        : order.address || '',
+    note: order.note || '',
+    deliveryMethod: order.deliveryMethod,
+    paymentMethod: order.paymentMethod,
+    discountPercent: discountState.discountPercent,
+    discountAmount: discountState.discountAmount,
+    extraFees: normalizeExtraFees(order.extraFees),
+    isConfirmed: order.isConfirmed,
+    isDelivered: order.isDelivered,
+    isPaid: order.isPaid,
+    createdAtIso: order.createdAtIso || now.toISOString(),
+  };
+
+  if (blankActive) {
+    return {
+      tabs: tabs.map((t) => (t.id === blankActive.id ? populatedTab : t)),
+      activeTabId: blankActive.id,
+    };
+  }
+
+  return {
+    tabs: [...tabs, populatedTab],
+    activeTabId: populatedTab.id,
   };
 }
 
@@ -69,11 +166,13 @@ export function formatPosTabDisplayTitle(
 export function calculatePosOrderTotals(
   items: CartItem[],
   discountAmountInput: number,
+  extraFees: ExtraFeeItem[] = [],
 ): {
   itemCount: number;
   subtotal: number;
   discountAmount: number;
   discountPercent: number;
+  extraFeeTotal: number;
   total: number;
 } {
   const itemCount = items.reduce(
@@ -96,13 +195,15 @@ export function calculatePosOrderTotals(
     roundedSubtotal > 0
       ? Number(((clampedDiscount / roundedSubtotal) * 100).toFixed(2))
       : 0;
-  const total = Math.max(0, roundedSubtotal - clampedDiscount);
+  const extraFeeTotal = sumExtraFees(extraFees);
+  const total = Math.max(0, roundedSubtotal - clampedDiscount) + extraFeeTotal;
 
   return {
     itemCount,
     subtotal: roundedSubtotal,
     discountAmount: clampedDiscount,
     discountPercent,
+    extraFeeTotal,
     total,
   };
 }
@@ -322,10 +423,37 @@ export function buildOrderRecordFromPosTab(
   },
 ): OrderRecord {
   const now = options.now ?? new Date();
-  const totals = calculatePosOrderTotals(tab.items, tab.discountAmount);
+  const normalizedFees = normalizeExtraFees(tab.extraFees);
+  const totals = calculatePosOrderTotals(
+    tab.items,
+    tab.discountAmount,
+    normalizedFees,
+  );
   const nowIso = now.toISOString();
+  const isEditingExisting = Boolean(tab.sourceOrderCode);
+  const isDelivered = options.markConfirmedAndPaid
+    ? tab.deliveryMethod === 'pickup'
+      ? true
+      : Boolean(tab.isDelivered)
+    : Boolean(isEditingExisting ? tab.isDelivered : false);
+  const isConfirmed = options.markConfirmedAndPaid
+    ? true
+    : Boolean(isEditingExisting ? tab.isConfirmed : false);
+  const isPaid = options.markConfirmedAndPaid
+    ? true
+    : Boolean(isEditingExisting ? tab.isPaid : false);
+  const status: OrderRecord['status'] = options.markConfirmedAndPaid
+    ? isDelivered
+      ? 'completed'
+      : 'confirmed'
+    : isDelivered
+      ? 'completed'
+      : isConfirmed
+        ? 'confirmed'
+        : 'pending';
 
   return {
+    id: tab.sourceOrderId ?? undefined,
     orderCode: tab.orderCode.trim() || generateOrderCode(now),
     customerId: tab.customerId ?? null,
     createdAt: now.toLocaleString('vi-VN', {
@@ -335,7 +463,7 @@ export function buildOrderRecordFromPosTab(
       hour: '2-digit',
       minute: '2-digit',
     }),
-    createdAtIso: nowIso,
+    createdAtIso: tab.sourceOrderCode ? tab.createdAtIso || nowIso : nowIso,
     customerName: tab.customerName.trim() || 'Khách lẻ',
     phone: tab.phone.replace(/[\s.-]/g, '').trim(),
     address:
@@ -349,12 +477,17 @@ export function buildOrderRecordFromPosTab(
     subtotal: totals.subtotal,
     discountAmount: totals.discountAmount,
     shippingFee: 0,
+    extraFees: normalizedFees,
+    extraFeeTotal: totals.extraFeeTotal,
+    paidAmount: isPaid ? totals.total : 0,
     total: totals.total,
-    status: options.markConfirmedAndPaid ? 'completed' : 'pending',
-    isConfirmed: options.markConfirmedAndPaid,
-    isPaid: options.markConfirmedAndPaid,
-    confirmedAt: options.markConfirmedAndPaid ? nowIso : null,
-    paidAt: options.markConfirmedAndPaid ? nowIso : null,
+    status,
+    isConfirmed,
+    isDelivered,
+    isPaid,
+    confirmedAt: isConfirmed ? nowIso : null,
+    deliveredAt: isDelivered ? nowIso : null,
+    paidAt: isPaid ? nowIso : null,
     syncedToSupabase: false,
   };
 }
@@ -364,13 +497,14 @@ export function closePosTab(
   activeTabId: string,
   tabIdToClose: string,
   now: Date = new Date(),
+  nextDailySequence: number = 1,
 ): {
   tabs: PosDraftTab[];
   activeTabId: string;
 } {
   const remaining = tabs.filter((tab) => tab.id !== tabIdToClose);
   if (remaining.length === 0) {
-    const fresh = createNewPosTab(1, now);
+    const fresh = createNewPosTab(1, now, nextDailySequence);
     return { tabs: [fresh], activeTabId: fresh.id };
   }
 
@@ -414,6 +548,14 @@ export function normalizePosDraftTab(
       typeof raw.orderCode === 'string' && raw.orderCode.trim()
         ? raw.orderCode
         : fallback.orderCode,
+    sourceOrderId:
+      typeof raw.sourceOrderId === 'string' && raw.sourceOrderId.trim()
+        ? raw.sourceOrderId
+        : null,
+    sourceOrderCode:
+      typeof raw.sourceOrderCode === 'string' && raw.sourceOrderCode.trim()
+        ? raw.sourceOrderCode
+        : null,
     items,
     customerId: raw.customerId ?? null,
     customerName:
@@ -428,6 +570,10 @@ export function normalizePosDraftTab(
     paymentMethod: raw.paymentMethod === 'transfer' ? 'transfer' : 'cod',
     discountPercent: discountState.discountPercent,
     discountAmount: discountState.discountAmount,
+    extraFees: normalizeExtraFees(raw.extraFees),
+    isConfirmed: Boolean(raw.isConfirmed),
+    isDelivered: Boolean(raw.isDelivered),
+    isPaid: Boolean(raw.isPaid),
     createdAtIso:
       typeof raw.createdAtIso === 'string' && raw.createdAtIso
         ? raw.createdAtIso

@@ -16,7 +16,7 @@ function getStorageEnv() {
 function formatStorageError(rawMessage: string): string {
   const lower = rawMessage.toLowerCase();
   if (lower.includes('bucket not found') || lower.includes('not found')) {
-    return `Chưa tìm thấy bucket "${PRODUCT_IMAGES_BUCKET}" trên Supabase Storage. Vui lòng chạy lại file db_creat/supabase_schema.sql trong Supabase SQL Editor.`;
+    return `Chưa tìm thấy bucket "${PRODUCT_IMAGES_BUCKET}" trên Supabase Storage. Vui lòng chạy file db_creat/upgrade_schema_01.sql (hoặc db_creat/schema.sql nếu tạo mới) trong Supabase SQL Editor.`;
   }
   if (lower.includes('row-level security') || lower.includes('permission')) {
     return 'Chỉ tài khoản Quản lý (Manager) hoặc Quản trị (Admin) mới có quyền tải hoặc đổi tên ảnh trên Supabase Storage.';

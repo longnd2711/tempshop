@@ -11,16 +11,19 @@ import {
   UserCheck,
   UserCog,
   Users,
+  Wallet,
 } from 'lucide-react';
 import type {
   AdminTab,
   AdminUser,
+  CashVoucherRecord,
   CategoryNode,
   CustomerRecord,
-  OrderLifecycleStatus,
   OrderRecord,
   Product,
   PurchaseOrderRecord,
+  QuickVoucherDraft,
+  SupplierRecord,
   UserProfileRecord,
 } from '../types/shop';
 import {
@@ -29,6 +32,7 @@ import {
   canManageUsers,
   resolveAllowedAdminTab,
 } from '../utils/adminLogic';
+import { CashbookAdminPanel } from './CashbookAdminPanel';
 import { CustomersAdminPanel } from './CustomersAdminPanel';
 import { OrdersPage } from './OrdersPage';
 import { ProductsAdminPanel } from './ProductsAdminPanel';
@@ -51,11 +55,17 @@ interface AdminPortalProps {
   posProducts: Product[];
   isLoadingOrders: boolean;
   ordersNotice?: string;
+  loginNonce?: number;
+  posOpenNonce?: number;
   onRefreshOrders: () => void;
   onToggleOrderConfirm: (order: OrderRecord) => void;
+  onToggleOrderDelivered: (order: OrderRecord) => void;
   onToggleOrderPaid: (order: OrderRecord) => void;
-  onChangeOrderStatus: (order: OrderRecord, status: OrderLifecycleStatus) => void;
   onCreateOrder: (order: OrderRecord) => Promise<{
+    synced: boolean;
+    errorMessage?: string;
+  }>;
+  onUpdateOrder: (order: OrderRecord) => Promise<{
     synced: boolean;
     errorMessage?: string;
   }>;
@@ -72,9 +82,16 @@ interface AdminPortalProps {
   onRefreshAdminProducts: () => Promise<void>;
 
   purchaseOrders: PurchaseOrderRecord[];
+  suppliers: SupplierRecord[];
   isLoadingPurchases: boolean;
   purchasesNotice?: string;
   onRefreshPurchases: () => Promise<void>;
+  onRefreshSuppliers: () => Promise<void>;
+
+  cashVouchers: CashVoucherRecord[];
+  isLoadingCashbook: boolean;
+  cashbookNotice?: string;
+  onRefreshCashbook: () => Promise<void>;
 
   adminUsers: UserProfileRecord[];
   isLoadingUsers: boolean;
@@ -91,6 +108,7 @@ const TAB_CONFIG: Array<{
   { id: 'customers', label: 'Khách hàng', icon: Users },
   { id: 'products', label: 'Quản lý hàng hóa', icon: Package },
   { id: 'purchases', label: 'Nhập hàng', icon: PackagePlus },
+  { id: 'cashbook', label: 'Thu Chi & Công nợ', icon: Wallet },
   { id: 'users', label: 'Người dùng', icon: UserCog },
 ];
 
@@ -106,11 +124,14 @@ export function AdminPortal({
   posProducts,
   isLoadingOrders,
   ordersNotice,
+  loginNonce = 0,
+  posOpenNonce = 0,
   onRefreshOrders,
   onToggleOrderConfirm,
+  onToggleOrderDelivered,
   onToggleOrderPaid,
-  onChangeOrderStatus,
   onCreateOrder,
+  onUpdateOrder,
   customers,
   isLoadingCustomers,
   customersNotice,
@@ -121,9 +142,15 @@ export function AdminPortal({
   adminProductsNotice,
   onRefreshAdminProducts,
   purchaseOrders,
+  suppliers,
   isLoadingPurchases,
   purchasesNotice,
   onRefreshPurchases,
+  onRefreshSuppliers,
+  cashVouchers,
+  isLoadingCashbook,
+  cashbookNotice,
+  onRefreshCashbook,
   adminUsers,
   isLoadingUsers,
   usersNotice,
@@ -133,6 +160,13 @@ export function AdminPortal({
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isSubmittingLogin, setIsSubmittingLogin] = useState(false);
+  const [pendingVoucherDraft, setPendingVoucherDraft] =
+    useState<QuickVoucherDraft | null>(null);
+
+  const handleOpenCashVoucher = (draft: QuickVoucherDraft) => {
+    setPendingVoucherDraft(draft);
+    onSelectTab('cashbook');
+  };
 
   const handleLoginSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -372,7 +406,8 @@ export function AdminPortal({
             ) : (
               <>
                 Tài khoản nhân viên (<strong>staff</strong>) chỉ có quyền truy cập{' '}
-                <strong>Quản lý đơn hàng</strong> và <strong>Khách hàng</strong>. Các mục{' '}
+                <strong>Quản lý đơn hàng</strong>, <strong>Khách hàng</strong> và{' '}
+                <strong>Thu Chi &amp; Công nợ</strong>. Các mục{' '}
                 <strong>Quản lý hàng hóa</strong>, <strong>Nhập hàng</strong> và{' '}
                 <strong>Người dùng</strong> không nằm trong quyền của nhân viên.
               </>
@@ -384,25 +419,33 @@ export function AdminPortal({
           <OrdersPage
             orders={orders}
             products={posProducts}
+            categories={adminCategories}
             customers={customers}
+            userRole={adminUser.role}
             isLoading={isLoadingOrders}
             notice={ordersNotice}
+            loginNonce={loginNonce}
+            posOpenNonce={posOpenNonce}
             onRefresh={onRefreshOrders}
             onBackToShop={onBackToShop}
             onToggleConfirm={onToggleOrderConfirm}
+            onToggleDelivered={onToggleOrderDelivered}
             onTogglePaid={onToggleOrderPaid}
-            onChangeStatus={onChangeOrderStatus}
             onCreateOrder={onCreateOrder}
+            onUpdateOrder={onUpdateOrder}
+            onOpenCashVoucher={handleOpenCashVoucher}
           />
         )}
 
         {activeTab === 'customers' && (
           <CustomersAdminPanel
             customers={customers}
+            orders={orders}
             userRole={adminUser.role}
             isLoading={isLoadingCustomers}
             notice={customersNotice}
             onRefresh={onRefreshCustomers}
+            onOpenCashVoucher={handleOpenCashVoucher}
           />
         )}
 
@@ -419,11 +462,33 @@ export function AdminPortal({
         {activeTab === 'purchases' && canManageInventory(adminUser.role) && (
           <PurchasesAdminPanel
             purchaseOrders={purchaseOrders}
+            suppliers={suppliers}
             products={adminProducts}
             categories={adminCategories}
+            cashVouchers={cashVouchers}
             isLoading={isLoadingPurchases}
             notice={purchasesNotice}
             onRefresh={onRefreshPurchases}
+            onRefreshProducts={onRefreshAdminProducts}
+            onRefreshSuppliers={onRefreshSuppliers}
+            onRefreshCashbook={onRefreshCashbook}
+            onOpenCashVoucher={handleOpenCashVoucher}
+          />
+        )}
+
+        {activeTab === 'cashbook' && (
+          <CashbookAdminPanel
+            vouchers={cashVouchers}
+            orders={orders}
+            customers={customers}
+            purchaseOrders={purchaseOrders}
+            suppliers={suppliers}
+            userRole={adminUser.role}
+            isLoading={isLoadingCashbook}
+            notice={cashbookNotice}
+            initialDraft={pendingVoucherDraft}
+            onConsumeInitialDraft={() => setPendingVoucherDraft(null)}
+            onRefresh={onRefreshCashbook}
           />
         )}
 

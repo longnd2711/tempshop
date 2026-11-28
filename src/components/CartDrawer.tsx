@@ -18,10 +18,13 @@ import type {
 } from '../types/shop';
 import {
   calculateCartSummary,
+  clampCartQuantity,
   clearSavedGuestCheckout,
   formatVnd,
   generateOrderCode,
+  getNextDailyOrderSequence,
   loadSavedGuestCheckout,
+  MAX_ORDER_QUANTITY,
   saveGuestCheckout,
   validateCheckoutForm,
 } from '../utils/shopLogic';
@@ -32,12 +35,91 @@ interface CartDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   items: CartItem[];
+  orders?: OrderRecord[];
   isAuthenticated?: boolean;
   customers?: CustomerRecord[];
   onUpdateQuantity: (productId: string, variant: string, delta: number) => void;
+  onSetQuantity: (productId: string, variant: string, quantity: number) => void;
   onRemoveItem: (productId: string, variant: string) => void;
   onClearCart: () => void;
   onOrderConfirmed: (order: OrderRecord) => void;
+}
+
+function CartItemQuantityStepper({
+  item,
+  onUpdateQuantity,
+  onSetQuantity,
+}: {
+  item: CartItem;
+  onUpdateQuantity: (productId: string, variant: string, delta: number) => void;
+  onSetQuantity: (productId: string, variant: string, quantity: number) => void;
+}) {
+  const [qtyInput, setQtyInput] = useState(String(item.quantity));
+
+  useEffect(() => {
+    setQtyInput(String(item.quantity));
+  }, [item.quantity]);
+
+  const commitTypedQuantity = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      setQtyInput(String(item.quantity));
+      return;
+    }
+    const clamped = clampCartQuantity(trimmed, MAX_ORDER_QUANTITY);
+    onSetQuantity(item.productId, item.variant, clamped);
+    setQtyInput(String(clamped));
+  };
+
+  return (
+    <div className="inline-flex items-center border border-slate-300 rounded-lg">
+      <button
+        type="button"
+        onClick={() => onUpdateQuantity(item.productId, item.variant, -1)}
+        aria-label={`Giảm số lượng ${item.name}`}
+        className="w-8 h-8 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 rounded-l-lg cursor-pointer"
+      >
+        <Minus className="w-3.5 h-3.5" aria-hidden="true" />
+      </button>
+      <input
+        type="number"
+        min={0}
+        max={MAX_ORDER_QUANTITY}
+        inputMode="numeric"
+        value={qtyInput}
+        onChange={(e) => {
+          const val = e.target.value;
+          setQtyInput(val);
+          const parsed = Number(val);
+          if (
+            val.trim() !== '' &&
+            Number.isFinite(parsed) &&
+            parsed > 0 &&
+            parsed <= MAX_ORDER_QUANTITY
+          ) {
+            onSetQuantity(item.productId, item.variant, Math.round(parsed));
+          }
+        }}
+        onBlur={() => commitTypedQuantity(qtyInput)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.currentTarget.blur();
+          }
+        }}
+        aria-label={`Nhập số lượng ${item.name}`}
+        className="w-12 h-8 text-center text-xs font-semibold tabular-nums bg-transparent focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+      />
+      <button
+        type="button"
+        disabled={item.quantity >= MAX_ORDER_QUANTITY}
+        onClick={() => onUpdateQuantity(item.productId, item.variant, 1)}
+        aria-label={`Tăng số lượng ${item.name}`}
+        className="w-8 h-8 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-r-lg cursor-pointer"
+      >
+        <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+      </button>
+    </div>
+  );
 }
 
 function buildInitialCheckoutForm(isAuthenticated: boolean): CheckoutFormData {
@@ -76,9 +158,11 @@ export function CartDrawer({
   isOpen,
   onClose,
   items,
+  orders = [],
   isAuthenticated = false,
   customers = [],
   onUpdateQuantity,
+  onSetQuantity,
   onRemoveItem,
   onClearCart,
   onOrderConfirmed,
@@ -92,10 +176,20 @@ export function CartDrawer({
   const [isFormDirty, setIsFormDirty] = useState(false);
   const [errors, setErrors] = useState<CheckoutErrors>({});
   const [confirmedOrder, setConfirmedOrder] = useState<OrderRecord | null>(null);
-  const [draftOrderCode, setDraftOrderCode] = useState<string>(() =>
-    generateOrderCode(),
-  );
+  const [draftOrderCode, setDraftOrderCode] = useState<string>(() => {
+    const now = new Date();
+    return generateOrderCode(now, getNextDailyOrderSequence(orders, now));
+  });
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isOpen && !confirmedOrder) {
+      const now = new Date();
+      setDraftOrderCode(
+        generateOrderCode(now, getNextDailyOrderSequence(orders, now)),
+      );
+    }
+  }, [isOpen, confirmedOrder, orders]);
 
   useEffect(() => {
     if (!isFormDirty && !confirmedOrder) {
@@ -192,8 +286,10 @@ export function CartDrawer({
       total: summary.total,
       status: 'pending',
       isConfirmed: false,
+      isDelivered: false,
       isPaid: false,
       confirmedAt: null,
+      deliveredAt: null,
       paidAt: null,
     };
 
@@ -213,7 +309,9 @@ export function CartDrawer({
     setIsFormDirty(false);
     setForm(buildInitialCheckoutForm(isAuthenticated));
     setErrors({});
-    setDraftOrderCode(generateOrderCode());
+    setDraftOrderCode(
+      generateOrderCode(now, getNextDailyOrderSequence(orders, now, [order.orderCode])),
+    );
   };
 
   const handleStartNewShopping = () => {
@@ -430,35 +528,16 @@ export function CartDrawer({
                       </div>
 
                       <p className="mt-0.5 text-xs text-slate-500">
-                        {item.variant} · {formatVnd(item.unitPrice)} / {item.unit}
+                        {item.variant} · {formatVnd(item.unitPrice)}
+                        {isAuthenticated ? ` / ${item.unit}` : ''}
                       </p>
 
                       <div className="mt-2.5 flex items-center justify-between gap-3">
-                        <div className="inline-flex items-center border border-slate-300 rounded-lg">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onUpdateQuantity(item.productId, item.variant, -1)
-                            }
-                            aria-label={`Giảm số lượng ${item.name}`}
-                            className="w-8 h-8 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 rounded-l-lg cursor-pointer"
-                          >
-                            <Minus className="w-3.5 h-3.5" aria-hidden="true" />
-                          </button>
-                          <span className="w-8 text-center text-xs font-semibold tabular-nums">
-                            {item.quantity}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onUpdateQuantity(item.productId, item.variant, 1)
-                            }
-                            aria-label={`Tăng số lượng ${item.name}`}
-                            className="w-8 h-8 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 rounded-r-lg cursor-pointer"
-                          >
-                            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                          </button>
-                        </div>
+                        <CartItemQuantityStepper
+                          item={item}
+                          onUpdateQuantity={onUpdateQuantity}
+                          onSetQuantity={onSetQuantity}
+                        />
 
                         <span className="text-sm font-semibold text-slate-900 tabular-nums">
                           {formatVnd(item.unitPrice * item.quantity)}

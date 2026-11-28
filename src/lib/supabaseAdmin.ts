@@ -1,13 +1,21 @@
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { getSupabaseClient } from './supabaseClient';
 import { mapSupabaseRowToCategory, mapSupabaseRowToProduct } from './supabaseProducts';
+import { normalizeExtraFees, sumExtraFees } from '../utils/adminLogic';
 import type {
   AdminUser,
+  CashVoucherCategory,
+  CashVoucherPaymentMethod,
+  CashVoucherRecord,
+  CashVoucherType,
   CategoryNode,
   CustomerRecord,
+  ExtraFeeItem,
   Product,
   PurchaseOrderItem,
   PurchaseOrderRecord,
+  PurchasePackOption,
+  SupplierRecord,
   UserProfileRecord,
   UserRole,
 } from '../types/shop';
@@ -28,6 +36,12 @@ function getAdminConfig() {
     'purchase_order_items';
   const customersTable =
     import.meta.env.VITE_SUPABASE_CUSTOMERS_TABLE?.trim() || 'customers';
+  const suppliersTable =
+    import.meta.env.VITE_SUPABASE_SUPPLIERS_TABLE?.trim() || 'suppliers';
+  const ordersTable =
+    import.meta.env.VITE_SUPABASE_ORDERS_TABLE?.trim() || 'orders';
+  const cashVouchersTable =
+    import.meta.env.VITE_SUPABASE_CASH_VOUCHERS_TABLE?.trim() || 'cash_vouchers';
 
   return {
     supabaseUrl,
@@ -38,6 +52,9 @@ function getAdminConfig() {
     purchaseOrdersTable,
     purchaseItemsTable,
     customersTable,
+    suppliersTable,
+    ordersTable,
+    cashVouchersTable,
   };
 }
 
@@ -202,6 +219,18 @@ export function mapSupabaseCustomerRow(row: Record<string, unknown>): CustomerRe
     phone: String(row.phone ?? ''),
     fullName: String(row.full_name ?? ''),
     defaultAddress: String(row.default_address ?? ''),
+    area: parseNullableText(row.area),
+    customerGroup: parseNullableText(row.customer_group) ?? 'Khách lẻ',
+    taxCode: parseNullableText(row.tax_code),
+    bankAccount: parseNullableText(row.bank_account),
+    bankName: parseNullableText(row.bank_name),
+    email: parseNullableText(row.email),
+    creditLimit:
+      row.credit_limit !== null &&
+      row.credit_limit !== undefined &&
+      Number.isFinite(Number(row.credit_limit))
+        ? Number(row.credit_limit)
+        : null,
     notes: String(row.notes ?? ''),
     totalOrders: Number(row.total_orders ?? 0),
     totalSpent: Number(row.total_spent ?? 0),
@@ -250,6 +279,13 @@ export interface UpsertCustomerInput {
   phone: string;
   fullName: string;
   defaultAddress: string;
+  area?: string | null;
+  customerGroup?: string | null;
+  taxCode?: string | null;
+  bankAccount?: string | null;
+  bankName?: string | null;
+  email?: string | null;
+  creditLimit?: number | null;
   notes: string;
 }
 
@@ -264,23 +300,71 @@ export async function upsertAdminCustomer(
   try {
     const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
     const cleanPhone = input.phone.replace(/[\s.-]/g, '').trim();
-    const payload = {
+    const cleanNullable = (val?: string | null) => {
+      const trimmed = (val ?? '').trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
+    const basePayload: Record<string, unknown> = {
       phone: cleanPhone,
       full_name: input.fullName.trim(),
       default_address: input.defaultAddress.trim(),
       notes: input.notes.trim(),
     };
 
-    const query = input.id
-      ? supabase
-          .from(customersTable)
-          .update(payload)
-          .eq('id', input.id)
-          .select()
-          .single()
-      : supabase.from(customersTable).insert(payload).select().single();
+    const extendedPayload: Record<string, unknown> = {
+      ...basePayload,
+      area: cleanNullable(input.area),
+      customer_group: cleanNullable(input.customerGroup) ?? 'Khách lẻ',
+      tax_code: cleanNullable(input.taxCode),
+      bank_account: cleanNullable(input.bankAccount),
+      bank_name: cleanNullable(input.bankName),
+      email: cleanNullable(input.email),
+      credit_limit:
+        input.creditLimit !== null &&
+        input.creditLimit !== undefined &&
+        Number.isFinite(Number(input.creditLimit))
+          ? Math.max(0, Number(input.creditLimit))
+          : null,
+    };
 
-    const { data, error } = await query;
+    const runSave = (payloadToSend: Record<string, unknown>) =>
+      (input.id
+        ? supabase.from(customersTable).update(payloadToSend).eq('id', input.id)
+        : supabase.from(customersTable).insert(payloadToSend)
+      )
+        .select()
+        .single();
+
+    let { data, error } = await runSave(extendedPayload);
+
+    if (
+      error &&
+      /area|customer_group|tax_code|bank_account|bank_name|email|credit_limit/i.test(
+        error.message,
+      )
+    ) {
+      const hasExtendedValues =
+        extendedPayload.area !== null ||
+        (extendedPayload.customer_group !== null &&
+          extendedPayload.customer_group !== 'Khách lẻ') ||
+        extendedPayload.tax_code !== null ||
+        extendedPayload.bank_account !== null ||
+        extendedPayload.bank_name !== null ||
+        extendedPayload.email !== null ||
+        extendedPayload.credit_limit !== null;
+      if (!hasExtendedValues) {
+        const retry = await runSave(basePayload);
+        data = retry.data;
+        error = retry.error;
+      } else {
+        return {
+          errorMessage:
+            'Bảng customers trên Supabase chưa có các cột mở rộng (khu vực, nhóm khách, MST, tài khoản NH, hạn mức nợ). Vui lòng chạy script db_creat/upgrade_schema_06.sql trong Supabase SQL Editor.',
+        };
+      }
+    }
+
     if (error || !data) {
       return { errorMessage: error?.message ?? 'Không thể lưu thông tin khách hàng.' };
     }
@@ -295,25 +379,154 @@ export async function upsertAdminCustomer(
   }
 }
 
-export async function deleteAdminCustomer(
-  customerId: string,
-): Promise<{ errorMessage?: string }> {
+export async function deleteCustomersToGuest(
+  customerIds: string[],
+): Promise<{ deletedCount: number; unlinkedOrders: number; errorMessage?: string }> {
+  const cleanIds = Array.from(
+    new Set(customerIds.map((id) => id.trim()).filter(Boolean)),
+  );
+  if (cleanIds.length === 0) {
+    return { deletedCount: 0, unlinkedOrders: 0 };
+  }
+
+  const { supabaseUrl, supabaseAnonKey, customersTable, ordersTable } = getAdminConfig();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { deletedCount: 0, unlinkedOrders: 0, errorMessage: 'Chưa cấu hình Supabase.' };
+  }
+
+  try {
+    const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
+    const rpcRes = await supabase.rpc('delete_customers_to_guest', {
+      p_customer_ids: cleanIds,
+    });
+
+    if (!rpcRes.error && rpcRes.data) {
+      const resData = rpcRes.data as Record<string, unknown>;
+      return {
+        deletedCount: Number(resData.deleted_count ?? cleanIds.length),
+        unlinkedOrders: Number(resData.unlinked_orders ?? 0),
+      };
+    }
+
+    // Fallback: unlink customer_id on orders while preserving customer_name, phone, address
+    if (
+      rpcRes.error &&
+      /delete_customers_to_guest|function|schema cache/i.test(rpcRes.error.message)
+    ) {
+      const { error: unlinkErr } = await supabase
+        .from(ordersTable)
+        .update({ customer_id: null })
+        .in('customer_id', cleanIds);
+      if (unlinkErr) {
+        return { deletedCount: 0, unlinkedOrders: 0, errorMessage: unlinkErr.message };
+      }
+      const { error: delErr } = await supabase
+        .from(customersTable)
+        .delete()
+        .in('id', cleanIds);
+      if (delErr) {
+        return { deletedCount: 0, unlinkedOrders: 0, errorMessage: delErr.message };
+      }
+      return { deletedCount: cleanIds.length, unlinkedOrders: 0 };
+    }
+
+    return {
+      deletedCount: 0,
+      unlinkedOrders: 0,
+      errorMessage: rpcRes.error?.message ?? 'Không thể xóa khách hàng đã chọn.',
+    };
+  } catch (err) {
+    return {
+      deletedCount: 0,
+      unlinkedOrders: 0,
+      errorMessage: err instanceof Error ? err.message : 'Lỗi xóa khách hàng',
+    };
+  }
+}
+
+export async function mergeCustomersInSupabase(input: {
+  primaryId: string;
+  duplicateIds: string[];
+  merged: {
+    phone: string;
+    fullName: string;
+    defaultAddress: string;
+    area?: string | null;
+    customerGroup?: string | null;
+    taxCode?: string | null;
+    bankAccount?: string | null;
+    bankName?: string | null;
+    email?: string | null;
+    creditLimit?: number | null;
+    notes: string;
+  };
+}): Promise<{ customer?: CustomerRecord; movedOrders?: number; errorMessage?: string }> {
   const { supabaseUrl, supabaseAnonKey, customersTable } = getAdminConfig();
   if (!supabaseUrl || !supabaseAnonKey) {
     return { errorMessage: 'Chưa cấu hình Supabase.' };
   }
+
   try {
     const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
-    const { error } = await supabase
+    const { data, error } = await supabase.rpc('merge_customers', {
+      p_primary_id: input.primaryId,
+      p_duplicate_ids: input.duplicateIds,
+      p_merged: {
+        phone: input.merged.phone.replace(/[\s.-]/g, '').trim(),
+        full_name: input.merged.fullName.trim(),
+        default_address: input.merged.defaultAddress.trim(),
+        area: input.merged.area?.trim() || null,
+        customer_group: input.merged.customerGroup?.trim() || 'Khách lẻ',
+        tax_code: input.merged.taxCode?.trim() || null,
+        bank_account: input.merged.bankAccount?.trim() || null,
+        bank_name: input.merged.bankName?.trim() || null,
+        email: input.merged.email?.trim() || null,
+        credit_limit:
+          input.merged.creditLimit !== null &&
+          input.merged.creditLimit !== undefined &&
+          Number.isFinite(Number(input.merged.creditLimit))
+            ? Math.max(0, Number(input.merged.creditLimit))
+            : null,
+        notes: input.merged.notes.trim(),
+      },
+    });
+
+    if (error) {
+      return {
+        errorMessage: /merge_customers|function|schema cache/i.test(error.message)
+          ? 'Chưa có hàm gộp khách hàng merge_customers trên Supabase. Vui lòng chạy script db_creat/upgrade_schema_06.sql trong Supabase SQL Editor.'
+          : error.message,
+      };
+    }
+
+    const resObj = (data ?? {}) as Record<string, unknown>;
+    const movedOrders = Number(resObj.moved_orders ?? 0);
+
+    const { data: refreshed } = await supabase
       .from(customersTable)
-      .delete()
-      .eq('id', customerId);
-    return error ? { errorMessage: error.message } : {};
+      .select('*')
+      .eq('id', input.primaryId)
+      .maybeSingle();
+
+    return {
+      customer: refreshed
+        ? mapSupabaseCustomerRow(refreshed as Record<string, unknown>)
+        : undefined,
+      movedOrders,
+    };
   } catch (err) {
     return {
-      errorMessage: err instanceof Error ? err.message : 'Lỗi xóa khách hàng',
+      errorMessage:
+        err instanceof Error ? err.message : 'Lỗi gộp khách hàng trên Supabase',
     };
   }
+}
+
+export async function deleteAdminCustomer(
+  customerId: string,
+): Promise<{ errorMessage?: string }> {
+  const res = await deleteCustomersToGuest([customerId]);
+  return res.errorMessage ? { errorMessage: res.errorMessage } : {};
 }
 
 export async function fetchAdminCategories(): Promise<{
@@ -482,11 +695,13 @@ export interface UpsertProductInput {
   sellingPrice: number;
   costPrice: number;
   stockQuantity: number;
-  minStock: number;
-  maxStock?: number;
+  purchasePackOptions?: PurchasePackOption[];
+  minStock: number | null;
+  maxStock: number | null;
   baseUnit: string;
   unit: string;
   conversionRate: number;
+  variants?: string[];
   imageUrls: string[];
   notes?: string;
   isActive: boolean;
@@ -502,7 +717,14 @@ export async function upsertAdminProduct(
 
   try {
     const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
-    const payload = {
+    const cleanedVariants = (input.variants ?? [])
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const cleanedPacks = (input.purchasePackOptions ?? [])
+      .filter((p) => p.label.trim() && Number.isFinite(p.factor) && p.factor > 0)
+      .map((p) => ({ label: p.label.trim(), factor: Number(p.factor) }));
+
+    const basePayload: Record<string, unknown> = {
       category_id: input.categoryId || null,
       sku: input.sku.trim().toUpperCase(),
       barcode: input.barcode?.trim() || null,
@@ -511,29 +733,82 @@ export async function upsertAdminProduct(
       selling_price: Math.max(0, Number(input.sellingPrice) || 0),
       cost_price: Math.max(0, Number(input.costPrice) || 0),
       stock_quantity: Number(input.stockQuantity) || 0,
-      min_stock: Math.max(0, Number(input.minStock) || 0),
+      min_stock:
+        input.minStock !== null &&
+        input.minStock !== undefined &&
+        Number.isFinite(input.minStock)
+          ? Number(input.minStock)
+          : null,
       max_stock:
-        input.maxStock !== undefined && Number.isFinite(input.maxStock)
+        input.maxStock !== null &&
+        input.maxStock !== undefined &&
+        Number.isFinite(input.maxStock)
           ? Number(input.maxStock)
           : null,
       base_unit: input.baseUnit.trim() || 'Cái',
       unit: input.unit.trim() || input.baseUnit.trim() || 'Cái',
       conversion_rate: Math.max(0.01, Number(input.conversionRate) || 1),
-      image_urls: input.imageUrls,
+      image_urls: input.imageUrls.length > 0 ? input.imageUrls : null,
       notes: input.notes?.trim() || null,
       is_active: Boolean(input.isActive),
     };
 
-    const query = input.id
-      ? supabase
-          .from(adminProductsTable)
-          .update(payload)
-          .eq('id', input.id)
-          .select()
-          .single()
-      : supabase.from(adminProductsTable).insert(payload).select().single();
+    const extendedPayload: Record<string, unknown> = {
+      ...basePayload,
+      variants: cleanedVariants,
+      purchase_pack_options: cleanedPacks,
+    };
 
-    const { data, error } = await query;
+    const runSave = (payloadToSend: Record<string, unknown>) =>
+      input.id
+        ? supabase
+            .from(adminProductsTable)
+            .update(payloadToSend)
+            .eq('id', input.id)
+            .select()
+            .single()
+        : supabase
+            .from(adminProductsTable)
+            .insert(payloadToSend)
+            .select()
+            .single();
+
+    let { data, error } = await runSave(extendedPayload);
+
+    // Fallback gracefully if DB hasn't run upgrade_schema_03 yet or image_urls/min_stock NOT NULL
+    if (error) {
+      const retryPayload = { ...extendedPayload };
+      let shouldRetry = false;
+
+      if (/purchase_pack_options/i.test(error.message)) {
+        delete retryPayload.purchase_pack_options;
+        shouldRetry = true;
+      }
+      if (/variants/i.test(error.message) && cleanedVariants.length === 0) {
+        delete retryPayload.variants;
+        shouldRetry = true;
+      }
+      if (/image_urls/i.test(error.message) && retryPayload.image_urls === null) {
+        retryPayload.image_urls = [];
+        shouldRetry = true;
+      }
+      if (/min_stock/i.test(error.message) && retryPayload.min_stock === null) {
+        retryPayload.min_stock = 0;
+        shouldRetry = true;
+      }
+
+      if (shouldRetry) {
+        const retry = await runSave(retryPayload);
+        data = retry.data;
+        error = retry.error;
+      } else if (/variants/i.test(error.message)) {
+        return {
+          errorMessage:
+            'Bảng products trên Supabase chưa có cột variants. Vui lòng chạy file db_creat/upgrade_schema_02.sql trong Supabase SQL Editor.',
+        };
+      }
+    }
+
     if (error || !data) {
       return { errorMessage: error?.message ?? 'Không thể lưu hàng hóa.' };
     }
@@ -568,6 +843,74 @@ export async function deleteAdminProduct(
   } catch (err) {
     return {
       errorMessage: err instanceof Error ? err.message : 'Lỗi xóa hàng hóa',
+    };
+  }
+}
+
+export async function updateProductStockBounds(
+  productId: string,
+  minStock: number | null,
+  maxStock: number | null,
+): Promise<{ product?: Product; errorMessage?: string }> {
+  const { supabaseUrl, supabaseAnonKey, adminProductsTable } = getAdminConfig();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { errorMessage: 'Chưa cấu hình Supabase.' };
+  }
+
+  const normalizeBound = (val: number | null) =>
+    val !== null && val !== undefined && Number.isFinite(Number(val))
+      ? Math.max(0, Number(val))
+      : null;
+
+  const cleanMin = normalizeBound(minStock);
+  const cleanMax = normalizeBound(maxStock);
+
+  try {
+    const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
+    let { data, error } = await supabase
+      .from(adminProductsTable)
+      .update({
+        min_stock: cleanMin,
+        max_stock: cleanMax,
+      })
+      .eq('id', productId)
+      .select()
+      .single();
+
+    if (error && /min_stock/i.test(error.message) && cleanMin === null) {
+      const retry = await supabase
+        .from(adminProductsTable)
+        .update({
+          min_stock: 0,
+          max_stock: cleanMax,
+        })
+        .eq('id', productId)
+        .select()
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
+
+    if (error || !data) {
+      return {
+        errorMessage:
+          error?.message ?? 'Không thể cập nhật tồn nhỏ nhất / lớn nhất.',
+      };
+    }
+
+    const rec = data as Record<string, unknown>;
+    return {
+      product: {
+        ...mapSupabaseRowToProduct(rec, 0),
+        isActive: rec.is_active !== false,
+      },
+    };
+  } catch (err) {
+    return {
+      errorMessage:
+        err instanceof Error
+          ? err.message
+          : 'Lỗi cập nhật tồn nhỏ nhất / lớn nhất',
     };
   }
 }
@@ -620,18 +963,275 @@ export function mapSupabasePurchaseOrderRow(
         ? row.created_at
         : undefined;
 
+  const extraFees = normalizeExtraFees(row.extra_fees);
+  const extraFeeTotal =
+    row.extra_fee_total !== undefined && row.extra_fee_total !== null
+      ? Math.max(0, Math.round(Number(row.extra_fee_total) || 0))
+      : sumExtraFees(extraFees);
+  const totalAmount = Number(row.total_amount ?? 0);
+  const isPaid =
+    typeof row.is_paid === 'boolean' ? row.is_paid : true;
+  const paidAmount =
+    row.paid_amount !== undefined && row.paid_amount !== null
+      ? Math.max(0, Math.round(Number(row.paid_amount) || 0))
+      : isPaid
+        ? totalAmount
+        : 0;
+
   return {
     id: poId || undefined,
     poCode: String(row.po_code ?? ''),
+    supplierId:
+      typeof row.supplier_id === 'string' && row.supplier_id
+        ? row.supplier_id
+        : null,
     supplierName: String(row.supplier_name ?? ''),
     note: String(row.note ?? ''),
-    totalAmount: Number(row.total_amount ?? 0),
+    extraFees,
+    extraFeeTotal,
+    paidAmount,
+    isPaid,
+    totalAmount,
     itemCount: Number(row.item_count ?? items.length),
     createdByEmail: String(row.created_by_email ?? ''),
     importedAt: importedIso ? formatDateTimeDisplay(importedIso) : '',
     importedAtIso: importedIso,
     items,
   };
+}
+
+function parseNullableText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function mapSupabaseSupplierRow(
+  row: Record<string, unknown>,
+): SupplierRecord {
+  const createdIso =
+    typeof row.created_at === 'string' ? row.created_at : undefined;
+  const updatedIso =
+    typeof row.updated_at === 'string' ? row.updated_at : undefined;
+
+  return {
+    id: String(row.id ?? ''),
+    name: String(row.name ?? ''),
+    shortName: parseNullableText(row.short_name),
+    taxCode: parseNullableText(row.tax_code),
+    phone: String(row.phone ?? ''),
+    address: String(row.address ?? ''),
+    area: parseNullableText(row.area),
+    paymentTerms: parseNullableText(row.payment_terms),
+    bankAccount: parseNullableText(row.bank_account),
+    bankName: parseNullableText(row.bank_name),
+    email: parseNullableText(row.email),
+    supplyCategory: parseNullableText(row.supply_category),
+    notes: String(row.notes ?? ''),
+    createdAt: createdIso ? formatDateTimeDisplay(createdIso) : undefined,
+    updatedAt: updatedIso ? formatDateTimeDisplay(updatedIso) : undefined,
+  };
+}
+
+export async function fetchAdminSuppliers(): Promise<{
+  suppliers: SupplierRecord[];
+  errorMessage?: string;
+}> {
+  const { supabaseUrl, supabaseAnonKey, suppliersTable } = getAdminConfig();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { suppliers: [], errorMessage: 'Chưa cấu hình Supabase.' };
+  }
+
+  try {
+    const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
+    const { data, error } = await supabase
+      .from(suppliersTable)
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) {
+      return {
+        suppliers: [],
+        errorMessage: /suppliers|schema cache|does not exist/i.test(error.message)
+          ? 'Chưa có bảng suppliers trên Supabase. Vui lòng chạy script db_creat/upgrade_schema_04.sql trong Supabase SQL Editor.'
+          : error.message,
+      };
+    }
+
+    return {
+      suppliers: (data ?? []).map((row) =>
+        mapSupabaseSupplierRow(row as Record<string, unknown>),
+      ),
+    };
+  } catch (err) {
+    return {
+      suppliers: [],
+      errorMessage:
+        err instanceof Error ? err.message : 'Lỗi tải danh sách nhà cung cấp',
+    };
+  }
+}
+
+export interface UpsertSupplierInput {
+  id?: string;
+  name: string;
+  shortName?: string | null;
+  taxCode?: string | null;
+  phone: string;
+  address: string;
+  area?: string | null;
+  paymentTerms?: string | null;
+  bankAccount?: string | null;
+  bankName?: string | null;
+  email?: string | null;
+  supplyCategory?: string | null;
+  notes: string;
+}
+
+export async function upsertAdminSupplier(
+  input: UpsertSupplierInput,
+): Promise<{ supplier: SupplierRecord | null; errorMessage?: string }> {
+  const { supabaseUrl, supabaseAnonKey, suppliersTable } = getAdminConfig();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { supplier: null, errorMessage: 'Chưa cấu hình Supabase.' };
+  }
+
+  const cleanName = input.name.trim();
+  if (!cleanName) {
+    return { supplier: null, errorMessage: 'Tên nhà cung cấp không được để trống.' };
+  }
+
+  const cleanNullable = (val?: string | null) => {
+    const trimmed = (val ?? '').trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+
+  const basePayload: Record<string, unknown> = {
+    name: cleanName,
+    phone: input.phone.replace(/[\s.-]/g, '').trim(),
+    address: input.address.trim(),
+    notes: input.notes.trim(),
+  };
+
+  const extendedV5Payload: Record<string, unknown> = {
+    ...basePayload,
+    short_name: cleanNullable(input.shortName),
+    tax_code: cleanNullable(input.taxCode),
+    bank_account: cleanNullable(input.bankAccount),
+    bank_name: cleanNullable(input.bankName),
+    email: cleanNullable(input.email),
+    supply_category: cleanNullable(input.supplyCategory),
+  };
+
+  const extendedPayload: Record<string, unknown> = {
+    ...extendedV5Payload,
+    area: cleanNullable(input.area),
+    payment_terms: cleanNullable(input.paymentTerms),
+  };
+
+  const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
+  const runSave = (payloadToSend: Record<string, unknown>) =>
+    (input.id
+      ? supabase.from(suppliersTable).update(payloadToSend).eq('id', input.id)
+      : supabase.from(suppliersTable).insert(payloadToSend)
+    )
+      .select('*')
+      .single();
+
+  try {
+    let { data, error } = await runSave(extendedPayload);
+
+    if (error && /area|payment_terms/i.test(error.message)) {
+      const hasV6Values =
+        extendedPayload.area !== null || extendedPayload.payment_terms !== null;
+      if (!hasV6Values) {
+        const retryV5 = await runSave(extendedV5Payload);
+        data = retryV5.data;
+        error = retryV5.error;
+      } else {
+        return {
+          supplier: null,
+          errorMessage:
+            'Bảng suppliers trên Supabase chưa có cột khu vực / điều khoản thanh toán (area, payment_terms). Vui lòng chạy script db_creat/upgrade_schema_06.sql trong Supabase SQL Editor.',
+        };
+      }
+    }
+
+    if (
+      error &&
+      /short_name|tax_code|bank_account|bank_name|email|supply_category/i.test(
+        error.message,
+      )
+    ) {
+      const hasExtendedValues =
+        extendedPayload.short_name !== null ||
+        extendedPayload.tax_code !== null ||
+        extendedPayload.bank_account !== null ||
+        extendedPayload.bank_name !== null ||
+        extendedPayload.email !== null ||
+        extendedPayload.supply_category !== null;
+      if (!hasExtendedValues) {
+        const retry = await runSave(basePayload);
+        data = retry.data;
+        error = retry.error;
+      } else {
+        return {
+          supplier: null,
+          errorMessage:
+            'Bảng suppliers trên Supabase chưa có các cột mới (short_name, tax_code, bank_account, bank_name, email, supply_category). Vui lòng chạy script db_creat/upgrade_schema_05.sql trong Supabase SQL Editor.',
+        };
+      }
+    }
+
+    if (error) {
+      return {
+        supplier: null,
+        errorMessage: /suppliers|schema cache|does not exist/i.test(error.message)
+          ? 'Chưa có bảng suppliers trên Supabase. Vui lòng chạy script db_creat/upgrade_schema_04.sql trong Supabase SQL Editor.'
+          : error.message,
+      };
+    }
+
+    return {
+      supplier: data
+        ? mapSupabaseSupplierRow(data as Record<string, unknown>)
+        : null,
+    };
+  } catch (err) {
+    return {
+      supplier: null,
+      errorMessage:
+        err instanceof Error ? err.message : 'Lỗi lưu thông tin nhà cung cấp',
+    };
+  }
+}
+
+export async function deleteAdminSupplier(
+  supplierId: string,
+): Promise<{ ok: boolean; errorMessage?: string }> {
+  const { supabaseUrl, supabaseAnonKey, suppliersTable } = getAdminConfig();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { ok: false, errorMessage: 'Chưa cấu hình Supabase.' };
+  }
+
+  try {
+    const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
+    const { error } = await supabase
+      .from(suppliersTable)
+      .delete()
+      .eq('id', supplierId);
+
+    if (error) {
+      return { ok: false, errorMessage: error.message };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      errorMessage:
+        err instanceof Error ? err.message : 'Lỗi xóa nhà cung cấp',
+    };
+  }
 }
 
 export async function fetchPurchaseOrders(): Promise<{
@@ -676,15 +1276,18 @@ export async function fetchPurchaseOrders(): Promise<{
 
 export interface CreatePurchaseOrderInput {
   poCode: string;
+  supplierId?: string | null;
   supplierName: string;
   note: string;
   updateCostPrice: boolean;
   items: PurchaseOrderItem[];
+  extraFees?: ExtraFeeItem[];
+  paidAmount?: number | null;
 }
 
 export async function createPurchaseOrderInSupabase(
   input: CreatePurchaseOrderInput,
-): Promise<{ ok: boolean; errorMessage?: string }> {
+): Promise<{ ok: boolean; poId?: string; errorMessage?: string }> {
   const { supabaseUrl, supabaseAnonKey } = getAdminConfig();
   if (!supabaseUrl || !supabaseAnonKey) {
     return { ok: false, errorMessage: 'Chưa cấu hình Supabase.' };
@@ -716,18 +1319,57 @@ export async function createPurchaseOrderInSupabase(
       image_urls: item.newProductImageUrls ?? [],
     }));
 
-    const { error } = await supabase.rpc('create_purchase_order', {
+    const basePayload = {
       p_po_code: input.poCode.trim(),
       p_supplier_name: input.supplierName.trim(),
       p_note: input.note.trim(),
       p_update_cost_price: input.updateCostPrice,
       p_items: itemPayloads,
+    };
+
+    const normalizedFees = normalizeExtraFees(input.extraFees);
+    const hasPaidParam =
+      input.paidAmount !== null &&
+      input.paidAmount !== undefined &&
+      Number.isFinite(Number(input.paidAmount));
+
+    let rpcRes = await supabase.rpc('create_purchase_order', {
+      ...basePayload,
+      p_supplier_id: input.supplierId || null,
+      p_extra_fees: normalizedFees,
+      p_paid_amount: hasPaidParam ? Math.max(0, Number(input.paidAmount)) : null,
     });
 
-    if (error) {
-      return { ok: false, errorMessage: error.message };
+    // Tương thích ngược với DB 6 tham số hoặc 5 tham số
+    if (
+      rpcRes.error &&
+      /function|parameter|create_purchase_order|p_extra_fees|p_paid_amount/i.test(
+        rpcRes.error.message,
+      )
+    ) {
+      rpcRes = await supabase.rpc('create_purchase_order', {
+        ...basePayload,
+        p_supplier_id: input.supplierId || null,
+      });
     }
-    return { ok: true };
+
+    if (
+      rpcRes.error &&
+      /function|parameter|create_purchase_order|p_supplier_id/i.test(
+        rpcRes.error.message,
+      )
+    ) {
+      rpcRes = await supabase.rpc('create_purchase_order', basePayload);
+    }
+
+    if (rpcRes.error) {
+      return { ok: false, errorMessage: rpcRes.error.message };
+    }
+    const resObj = (rpcRes.data ?? {}) as Record<string, unknown>;
+    return {
+      ok: true,
+      poId: typeof resObj.id === 'string' ? resObj.id : undefined,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -837,7 +1479,7 @@ export async function updateAdminUserProfile(
           error.message.includes('phone') ||
           error.message.includes('notes') ||
           error.message.includes('user_profiles_role_check')
-            ? 'Cấu trúc bảng user_profiles chưa được cập nhật quyền manager hoặc cột phone/notes. Vui lòng chạy lại script db_creat/supabase_schema.sql trong Supabase SQL Editor.'
+            ? 'Cấu trúc bảng user_profiles chưa được cập nhật quyền manager hoặc cột phone/notes. Vui lòng chạy script db_creat/upgrade_schema_01.sql (hoặc db_creat/schema.sql nếu tạo mới) trong Supabase SQL Editor.'
             : error.message,
       };
     }
@@ -855,3 +1497,191 @@ export async function updateAdminUserProfile(
     };
   }
 }
+
+export function mapSupabaseCashVoucherRow(
+  row: Record<string, unknown>,
+): CashVoucherRecord {
+  const voucherDateIso =
+    typeof row.voucher_date === 'string'
+      ? row.voucher_date
+      : typeof row.created_at === 'string'
+        ? row.created_at
+        : undefined;
+
+  return {
+    id: String(row.id ?? ''),
+    voucherCode: String(row.voucher_code ?? ''),
+    voucherType: row.voucher_type === 'payment' ? 'payment' : 'receipt',
+    category: String(row.category ?? 'other_income') as CashVoucherCategory,
+    amount: Math.max(0, Number(row.amount ?? 0)),
+    paymentMethod: String(row.payment_method ?? 'cash') as CashVoucherPaymentMethod,
+    customerId:
+      typeof row.customer_id === 'string' && row.customer_id
+        ? row.customer_id
+        : null,
+    supplierId:
+      typeof row.supplier_id === 'string' && row.supplier_id
+        ? row.supplier_id
+        : null,
+    orderId:
+      typeof row.order_id === 'string' && row.order_id ? row.order_id : null,
+    purchaseOrderId:
+      typeof row.purchase_order_id === 'string' && row.purchase_order_id
+        ? row.purchase_order_id
+        : null,
+    relatedCode: String(row.related_code ?? ''),
+    counterpartyName: String(row.counterparty_name ?? ''),
+    note: String(row.note ?? ''),
+    voucherDate: voucherDateIso ? formatDateTimeDisplay(voucherDateIso) : '',
+    voucherDateIso,
+    createdByEmail: String(row.created_by_email ?? ''),
+    createdAt:
+      typeof row.created_at === 'string'
+        ? formatDateTimeDisplay(row.created_at)
+        : undefined,
+  };
+}
+
+export async function fetchCashVouchers(): Promise<{
+  vouchers: CashVoucherRecord[];
+  errorMessage?: string;
+}> {
+  const { supabaseUrl, supabaseAnonKey, cashVouchersTable } = getAdminConfig();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { vouchers: [], errorMessage: 'Chưa cấu hình Supabase.' };
+  }
+
+  try {
+    const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
+    const { data, error } = await supabase
+      .from(cashVouchersTable)
+      .select('*')
+      .order('voucher_date', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      return {
+        vouchers: [],
+        errorMessage: /cash_vouchers|schema cache|does not exist/i.test(error.message)
+          ? 'Chưa có bảng phiếu thu chi cash_vouchers trên Supabase. Vui lòng chạy script db_creat/upgrade_schema_06.sql trong Supabase SQL Editor.'
+          : error.message,
+      };
+    }
+
+    return {
+      vouchers: (data ?? []).map((row) =>
+        mapSupabaseCashVoucherRow(row as Record<string, unknown>),
+      ),
+    };
+  } catch (err) {
+    return {
+      vouchers: [],
+      errorMessage:
+        err instanceof Error ? err.message : 'Lỗi tải danh sách phiếu thu/chi',
+    };
+  }
+}
+
+export interface CreateCashVoucherInput {
+  voucherCode: string;
+  voucherType: CashVoucherType;
+  category: CashVoucherCategory;
+  amount: number;
+  paymentMethod: CashVoucherPaymentMethod | string;
+  customerId?: string | null;
+  supplierId?: string | null;
+  orderId?: string | null;
+  purchaseOrderId?: string | null;
+  relatedCode?: string;
+  counterpartyName?: string;
+  note?: string;
+  voucherDateIso?: string;
+}
+
+export async function createCashVoucherInSupabase(
+  input: CreateCashVoucherInput,
+): Promise<{ id?: string; voucherCode?: string; errorMessage?: string }> {
+  const { supabaseUrl, supabaseAnonKey } = getAdminConfig();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { errorMessage: 'Chưa cấu hình Supabase.' };
+  }
+
+  try {
+    const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
+    const { data, error } = await supabase.rpc('create_cash_voucher', {
+      p_voucher_code: input.voucherCode.trim(),
+      p_voucher_type: input.voucherType,
+      p_category: input.category,
+      p_amount: Math.max(0, Number(input.amount) || 0),
+      p_payment_method: input.paymentMethod || 'cash',
+      p_customer_id: input.customerId || null,
+      p_supplier_id: input.supplierId || null,
+      p_order_id: input.orderId || null,
+      p_purchase_order_id: input.purchaseOrderId || null,
+      p_related_code: (input.relatedCode ?? '').trim(),
+      p_counterparty_name: (input.counterpartyName ?? '').trim(),
+      p_note: (input.note ?? '').trim(),
+      p_voucher_date: input.voucherDateIso || new Date().toISOString(),
+    });
+
+    if (error) {
+      return {
+        errorMessage: /create_cash_voucher|cash_vouchers|function|schema cache/i.test(
+          error.message,
+        )
+          ? 'Chưa có hàm create_cash_voucher hoặc bảng cash_vouchers trên Supabase. Vui lòng chạy script db_creat/upgrade_schema_06.sql trong Supabase SQL Editor.'
+          : error.message,
+      };
+    }
+
+    const resObj = (data ?? {}) as Record<string, unknown>;
+    return {
+      id: typeof resObj.id === 'string' ? resObj.id : undefined,
+      voucherCode:
+        typeof resObj.voucher_code === 'string'
+          ? resObj.voucher_code
+          : input.voucherCode.trim(),
+    };
+  } catch (err) {
+    return {
+      errorMessage:
+        err instanceof Error ? err.message : 'Lỗi lập phiếu thu/chi trên Supabase',
+    };
+  }
+}
+
+export async function deleteCashVoucherInSupabase(
+  voucherId: string,
+): Promise<{ ok: boolean; errorMessage?: string }> {
+  const { supabaseUrl, supabaseAnonKey } = getAdminConfig();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { ok: false, errorMessage: 'Chưa cấu hình Supabase.' };
+  }
+
+  try {
+    const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey);
+    const { error } = await supabase.rpc('delete_cash_voucher', {
+      p_voucher_id: voucherId,
+    });
+
+    if (error) {
+      return {
+        ok: false,
+        errorMessage: /delete_cash_voucher|cash_vouchers|function|schema cache/i.test(
+          error.message,
+        )
+          ? 'Chưa có hàm delete_cash_voucher trên Supabase. Vui lòng chạy script db_creat/upgrade_schema_06.sql trong Supabase SQL Editor.'
+          : error.message,
+      };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      errorMessage:
+        err instanceof Error ? err.message : 'Lỗi xóa phiếu thu/chi trên Supabase',
+    };
+  }
+}
+

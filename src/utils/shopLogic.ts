@@ -5,12 +5,66 @@ import type {
   CheckoutErrors,
   CheckoutFormData,
   DeliveryMethod,
+  OrderRecord,
   Product,
   SortOption,
 } from '../types/shop';
 
 export const FREE_SHIP_THRESHOLD = 150000;
 export const STANDARD_SHIPPING_FEE = 15000;
+export const MAX_ORDER_QUANTITY = 999;
+
+export function clampOrderQuantity(
+  rawValue: unknown,
+  max: number = MAX_ORDER_QUANTITY,
+): number {
+  const num = Number(rawValue);
+  if (!Number.isFinite(num) || num <= 0) return 1;
+  return Math.min(max, Math.max(1, Math.round(num)));
+}
+
+export function clampCartQuantity(
+  rawValue: unknown,
+  max: number = MAX_ORDER_QUANTITY,
+): number {
+  const num = Number(rawValue);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return Math.min(max, Math.max(0, Math.round(num)));
+}
+
+export function formatStockQuantity(rawStock: unknown): string {
+  const num = Number(rawStock ?? 0);
+  if (!Number.isFinite(num)) return '000';
+  const sign = num < 0 ? '-' : '';
+  const abs = Math.abs(num);
+  if (abs < 1000) {
+    if (Number.isInteger(abs)) {
+      return `${sign}${String(abs).padStart(3, '0')}`;
+    }
+    const intPart = Math.floor(abs);
+    const decPart = String(Number((abs - intPart).toFixed(2))).slice(1);
+    return `${sign}${String(intPart).padStart(3, '0')}${decPart}`;
+  }
+  return `${sign}${abs.toLocaleString('vi-VN')}`;
+}
+
+export function formatStockDisplay(rawStock: unknown, unit: string): string {
+  const cleanUnit = unit.trim() || 'Cái';
+  return `Còn ${formatStockQuantity(rawStock)} ${cleanUnit}`;
+}
+
+export function formatStockAndOrderedDisplay(
+  rawStock: unknown,
+  unit: string,
+  rawOrdered: unknown,
+): string {
+  const base = formatStockDisplay(rawStock, unit);
+  const orderedNum = Number(rawOrdered ?? 0);
+  const formattedOrdered = formatStockQuantity(
+    Number.isFinite(orderedNum) ? orderedNum : 0,
+  );
+  return `${base}, Khách đặt ${formattedOrdered}`;
+}
 
 export function normalizeVietnameseText(input: string): string {
   return input
@@ -242,11 +296,109 @@ export function validateCheckoutForm(
   return errors;
 }
 
-export function generateOrderCode(now: Date = new Date()): string {
+export const RFC4648_BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+export function encodeRfc4648Base32(
+  value: number,
+  minWidth: number = 2,
+): string {
+  const safeNum = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  let remaining = safeNum;
+  let encoded = '';
+  do {
+    encoded = RFC4648_BASE32_ALPHABET[remaining % 32] + encoded;
+    remaining = Math.floor(remaining / 32);
+  } while (remaining > 0);
+  return encoded.padStart(minWidth, 'A');
+}
+
+export function decodeRfc4648Base32(encoded: string): number | null {
+  const clean = encoded.trim().toUpperCase();
+  if (!clean) return null;
+  let result = 0;
+  for (const ch of clean) {
+    const idx = RFC4648_BASE32_ALPHABET.indexOf(ch);
+    if (idx === -1) return null;
+    result = result * 32 + idx;
+  }
+  return result;
+}
+
+export function getNextDailyOrderSequence(
+  orders: Array<Pick<OrderRecord, 'createdAtIso' | 'createdAt' | 'orderCode'>>,
+  now: Date = new Date(),
+  extraOrderCodes: string[] = [],
+): number {
+  const yyyy = now.getFullYear();
+  const mm = now.getMonth() + 1;
+  const dd = now.getDate();
+  const mmStr = String(mm).padStart(2, '0');
+  const ddStr = String(dd).padStart(2, '0');
+  const codeDayPrefix = `DH-${mmStr}${ddStr}-`;
+  const vnDateSuffix = `${ddStr}/${mmStr}/${yyyy}`;
+
+  let sameDayCount = 0;
+  let maxSeqFound = 0;
+  const seenCodes = new Set<string>();
+
+  const inspectCode = (rawCode?: string) => {
+    const code = (rawCode ?? '').trim().toUpperCase();
+    if (!code || seenCodes.has(code)) return false;
+    seenCodes.add(code);
+    if (code.startsWith(codeDayPrefix)) {
+      const match = code.match(/^DH-\d{4}-\d{4}-([A-Z2-7]{2,})$/);
+      if (match?.[1]) {
+        const decoded = decodeRfc4648Base32(match[1]);
+        if (decoded !== null && decoded > maxSeqFound) {
+          maxSeqFound = decoded;
+        }
+      }
+      return true;
+    }
+    return false;
+  };
+
+  for (const order of orders) {
+    let isToday = false;
+    if (order.createdAtIso) {
+      const d = new Date(order.createdAtIso);
+      if (
+        !Number.isNaN(d.getTime()) &&
+        d.getFullYear() === yyyy &&
+        d.getMonth() + 1 === mm &&
+        d.getDate() === dd
+      ) {
+        isToday = true;
+      }
+    } else if (order.createdAt && order.createdAt.includes(vnDateSuffix)) {
+      isToday = true;
+    }
+
+    const codeMatchesToday = inspectCode(order.orderCode);
+    if (isToday || codeMatchesToday) {
+      sameDayCount += 1;
+    }
+  }
+
+  for (const extra of extraOrderCodes) {
+    if (inspectCode(extra)) {
+      sameDayCount += 1;
+    }
+  }
+
+  return Math.max(sameDayCount + 1, maxSeqFound + 1, 1);
+}
+
+export function generateOrderCode(
+  now: Date = new Date(),
+  dailySequence: number = 1,
+): string {
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
   const hh = String(now.getHours()).padStart(2, '0');
-  const mm = String(now.getMinutes()).padStart(2, '0');
-  const rand = Math.floor(100 + Math.random() * 900);
-  return `DH-${hh}${mm}-${rand}`;
+  const mi = String(now.getMinutes()).padStart(2, '0');
+  const seq = encodeRfc4648Base32(dailySequence, 2);
+  return `DH-${mm}${dd}-${hh}${mi}-${seq}`;
 }
 
 export const GUEST_CHECKOUT_STORAGE_KEY = 'vpp_huong_long_guest_checkout_v1';

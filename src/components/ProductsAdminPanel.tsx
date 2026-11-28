@@ -20,8 +20,20 @@ import {
   upsertAdminProduct,
 } from '../lib/supabaseAdmin';
 import { renameSupabaseProductImagesForSku } from '../lib/supabaseStorage';
-import type { CategoryNode, Product } from '../types/shop';
-import { parseImageUrlsInput, slugifyVietnamese } from '../utils/adminLogic';
+import type {
+  CategoryNode,
+  Product,
+  ProductStockFilter,
+  PurchasePackOption,
+} from '../types/shop';
+import {
+  formatVariantsInput,
+  matchesProductStockFilter,
+  normalizePurchasePackOptions,
+  parseImageUrlsInput,
+  parseVariantsInput,
+  slugifyVietnamese,
+} from '../utils/adminLogic';
 import {
   DEFAULT_DRIVE_FOLDER_NAME,
   normalizeSkuMatchKey,
@@ -57,6 +69,9 @@ interface ProductFormState {
   baseUnit: string;
   unit: string;
   conversionRate: string;
+  allowSinglePiece: boolean;
+  packRows: Array<{ label: string; factor: string }>;
+  variantsText: string;
   imageUrlsText: string;
   notes: string;
   isActive: boolean;
@@ -82,11 +97,14 @@ const EMPTY_PRODUCT_FORM: ProductFormState = {
   sellingPrice: '0',
   costPrice: '0',
   stockQuantity: '0',
-  minStock: '0',
+  minStock: '',
   maxStock: '',
   baseUnit: 'Cái',
   unit: 'Cái',
   conversionRate: '1',
+  allowSinglePiece: true,
+  packRows: [],
+  variantsText: '',
   imageUrlsText: '',
   notes: '',
   isActive: true,
@@ -114,6 +132,7 @@ export function ProductsAdminPanel({
   const [filterActive, setFilterActive] = useState<'all' | 'active' | 'inactive'>(
     'all',
   );
+  const [filterStock, setFilterStock] = useState<ProductStockFilter>('all');
 
   const [isProductFormOpen, setIsProductFormOpen] = useState(false);
   const [productForm, setProductForm] =
@@ -187,19 +206,22 @@ export function ProductsAdminPanel({
       }
       if (filterActive === 'active' && p.isActive === false) return false;
       if (filterActive === 'inactive' && p.isActive !== false) return false;
+      if (!matchesProductStockFilter(p, filterStock)) return false;
       if (!norm) return true;
       const hay = normalizeVietnameseText(
         `${p.sku} ${p.barcode ?? ''} ${p.name} ${p.brand ?? ''} ${p.category}`,
       );
       return hay.includes(norm);
     });
-  }, [products, searchQuery, filterCategoryId, filterActive]);
+  }, [products, searchQuery, filterCategoryId, filterActive, filterStock]);
 
   const stats = useMemo(() => {
     const totalProducts = products.length;
     const activeProducts = products.filter((p) => p.isActive !== false).length;
-    const lowStockProducts = products.filter(
-      (p) => p.stock <= (p.minStock ?? 0),
+    const lowStockProducts = products.filter((p) =>
+      p.minStock !== null && p.minStock !== undefined
+        ? p.stock <= p.minStock
+        : p.stock <= 0,
     ).length;
     const totalCategories = categories.length;
     return { totalProducts, activeProducts, lowStockProducts, totalCategories };
@@ -210,6 +232,7 @@ export function ProductsAdminPanel({
       ...EMPTY_PRODUCT_FORM,
       categoryId: categories[0]?.id ?? '',
     });
+    setConfirmDeleteProductId(null);
     setProductError(null);
     setIsProductFormOpen(true);
   };
@@ -221,6 +244,31 @@ export function ProductsAdminPanel({
         : product.image
           ? [product.image]
           : [];
+    const configuredPacks = product.purchasePackOptions;
+    let allowSinglePiece = true;
+    let packRows: Array<{ label: string; factor: string }> = [];
+
+    if (Array.isArray(configuredPacks) && configuredPacks.length > 0) {
+      allowSinglePiece = configuredPacks.some((opt) => Number(opt.factor) === 1);
+      packRows = configuredPacks
+        .filter((opt) => Number(opt.factor) !== 1)
+        .map((opt) => ({
+          label: opt.label,
+          factor: String(opt.factor),
+        }));
+    } else if (
+      (product.conversionRate ?? 1) > 1 &&
+      product.unit &&
+      product.unit !== (product.baseUnit ?? product.unit)
+    ) {
+      packRows = [
+        {
+          label: product.unit,
+          factor: String(product.conversionRate),
+        },
+      ];
+    }
+
     setProductForm({
       id: product.id,
       originalSku: product.sku,
@@ -232,7 +280,10 @@ export function ProductsAdminPanel({
       sellingPrice: String(product.price ?? 0),
       costPrice: String(product.costPrice ?? 0),
       stockQuantity: String(product.stock ?? 0),
-      minStock: String(product.minStock ?? 0),
+      minStock:
+        product.minStock !== undefined && product.minStock !== null
+          ? String(product.minStock)
+          : '',
       maxStock:
         product.maxStock !== undefined && product.maxStock !== null
           ? String(product.maxStock)
@@ -240,10 +291,14 @@ export function ProductsAdminPanel({
       baseUnit: product.baseUnit ?? product.unit ?? 'Cái',
       unit: product.unit ?? 'Cái',
       conversionRate: String(product.conversionRate ?? 1),
+      allowSinglePiece,
+      packRows,
+      variantsText: formatVariantsInput(product.variants),
       imageUrlsText: imageList.join('\n'),
       notes: product.notes ?? '',
       isActive: product.isActive !== false,
     });
+    setConfirmDeleteProductId(null);
     setProductError(null);
     setIsProductFormOpen(true);
   };
@@ -258,9 +313,38 @@ export function ProductsAdminPanel({
     setProductError(null);
     setIsSavingProduct(true);
     try {
-      const parsedMax = productForm.maxStock.trim()
-        ? Number(productForm.maxStock)
-        : undefined;
+      const trimmedMin = productForm.minStock.trim();
+      const parsedMin = trimmedMin ? Number(trimmedMin) : null;
+      const minStockValue =
+        parsedMin !== null && Number.isFinite(parsedMin)
+          ? Math.max(0, parsedMin)
+          : null;
+
+      const trimmedMax = productForm.maxStock.trim();
+      const parsedMax = trimmedMax ? Number(trimmedMax) : null;
+      const maxStockValue =
+        parsedMax !== null && Number.isFinite(parsedMax)
+          ? Math.max(0, parsedMax)
+          : null;
+
+      const baseUnitLabel =
+        productForm.baseUnit.trim() || productForm.unit.trim() || 'Cái';
+      const rawPackOptions: PurchasePackOption[] = [];
+      if (productForm.allowSinglePiece) {
+        rawPackOptions.push({ label: baseUnitLabel, factor: 1 });
+      }
+      for (const row of productForm.packRows) {
+        const lbl = row.label.trim();
+        const fac = Number(row.factor);
+        if (lbl && Number.isFinite(fac) && fac > 0) {
+          rawPackOptions.push({ label: lbl, factor: fac });
+        }
+      }
+      const normalizedPackOptions = normalizePurchasePackOptions(
+        rawPackOptions,
+        baseUnitLabel,
+      );
+
       let finalImageUrls = parseImageUrlsInput(productForm.imageUrlsText);
       const renameNotes: string[] = [];
 
@@ -315,14 +399,13 @@ export function ProductsAdminPanel({
         sellingPrice: Number(productForm.sellingPrice) || 0,
         costPrice: Number(productForm.costPrice) || 0,
         stockQuantity: Number(productForm.stockQuantity) || 0,
-        minStock: Number(productForm.minStock) || 0,
-        maxStock:
-          parsedMax !== undefined && Number.isFinite(parsedMax)
-            ? parsedMax
-            : undefined,
+        purchasePackOptions: normalizedPackOptions,
+        minStock: minStockValue,
+        maxStock: maxStockValue,
         baseUnit: productForm.baseUnit,
         unit: productForm.unit,
         conversionRate: Number(productForm.conversionRate) || 1,
+        variants: parseVariantsInput(productForm.variantsText),
         imageUrls: finalImageUrls,
         notes: productForm.notes,
         isActive: productForm.isActive,
@@ -348,14 +431,15 @@ export function ProductsAdminPanel({
     }
   };
 
-  const handleDeleteProduct = async (product: Product) => {
-    const res = await deleteAdminProduct(product.id);
+  const handleDeleteProductById = async (productId: string, productName: string) => {
+    const res = await deleteAdminProduct(productId);
     setConfirmDeleteProductId(null);
     if (res.errorMessage) {
-      setStatusFeedback(`Không thể xóa hàng hóa: ${res.errorMessage}`);
+      setProductError(`Không thể xóa hàng hóa: ${res.errorMessage}`);
       return;
     }
-    setStatusFeedback(`Đã xóa hàng hóa "${product.name}".`);
+    setIsProductFormOpen(false);
+    setStatusFeedback(`Đã xóa hàng hóa "${productName}".`);
     await onRefresh();
   };
 
@@ -625,6 +709,20 @@ export function ProductsAdminPanel({
                 <option value="active">Đang hiển thị</option>
                 <option value="inactive">Đang ẩn</option>
               </select>
+
+              <select
+                aria-label="Lọc tồn kho"
+                data-testid="products-stock-filter"
+                value={filterStock}
+                onChange={(e) =>
+                  setFilterStock(e.target.value as ProductStockFilter)
+                }
+                className="min-h-[40px] px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg text-slate-800 cursor-pointer"
+              >
+                <option value="all">Tất cả tồn kho</option>
+                <option value="below-min">Tồn dưới mức tối thiểu</option>
+                <option value="out-of-stock">Tồn kho &lt;= 0</option>
+              </select>
             </div>
           </div>
 
@@ -642,7 +740,7 @@ export function ProductsAdminPanel({
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[920px] text-left border-collapse">
+                <table className="w-full min-w-[960px] text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
                       <th className="py-3 px-4">Sản phẩm</th>
@@ -650,8 +748,7 @@ export function ProductsAdminPanel({
                       <th className="py-3 px-4 text-right">Giá nhập</th>
                       <th className="py-3 px-4 text-right">Giá bán</th>
                       <th className="py-3 px-4 text-right">Tồn kho</th>
-                      <th className="py-3 px-4">Trạng thái</th>
-                      <th className="py-3 px-4 text-right">Thao tác</th>
+                      <th className="py-3 px-4 text-right">Khách đặt</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-sm">
@@ -661,21 +758,40 @@ export function ProductsAdminPanel({
                           categoryById.get(product.categoryId)?.name) ||
                         product.categoryLabel ||
                         'Chưa phân nhóm';
-                      const isLow = product.stock <= (product.minStock ?? 0);
+                      const isInactive = product.isActive === false;
+                      const isLow =
+                        product.minStock !== null &&
+                        product.minStock !== undefined
+                          ? product.stock <= product.minStock
+                          : product.stock <= 0;
+                      const orderedQty = product.orderedQuantity ?? 0;
+                      const baseUnitLabel = product.baseUnit ?? product.unit;
                       return (
                         <tr
                           key={product.id}
-                          className="hover:bg-slate-50/70 align-middle"
+                          onClick={() => openEditProduct(product)}
+                          title="Nhấn để chỉnh sửa hàng hóa"
+                          className={`align-middle cursor-pointer transition-colors ${
+                            isInactive
+                              ? 'bg-slate-100 text-slate-500 hover:bg-slate-200/70'
+                              : 'hover:bg-blue-50/40'
+                          }`}
                         >
                           <td className="py-3 px-4">
                             <div className="flex items-center gap-3">
                               <SafeImage
                                 src={product.image}
                                 alt={product.name}
-                                className="w-11 h-11 rounded-lg object-cover border border-slate-200 bg-slate-100 shrink-0"
+                                className={`w-11 h-11 rounded-lg object-cover border border-slate-200 bg-slate-100 shrink-0 ${
+                                  isInactive ? 'opacity-65 grayscale-[40%]' : ''
+                                }`}
                               />
                               <div className="min-w-0">
-                                <p className="font-semibold text-slate-900 line-clamp-1">
+                                <p
+                                  className={`font-semibold line-clamp-1 ${
+                                    isInactive ? 'text-slate-600' : 'text-slate-900'
+                                  }`}
+                                >
                                   {product.name}
                                 </p>
                                 <p className="text-xs text-slate-500">
@@ -684,12 +800,19 @@ export function ProductsAdminPanel({
                                   product.conversionRate > 1
                                     ? ` (1 ${product.unit} = ${product.conversionRate} ${product.baseUnit ?? 'Cái'})`
                                     : ''}
+                                  {formatVariantsInput(product.variants)
+                                    ? ` · Phân loại: ${formatVariantsInput(product.variants)}`
+                                    : ''}
                                 </p>
                               </div>
                             </div>
                           </td>
                           <td className="py-3 px-4">
-                            <p className="font-mono text-xs font-semibold text-slate-800">
+                            <p
+                              className={`font-mono text-xs font-semibold ${
+                                isInactive ? 'text-slate-600' : 'text-slate-800'
+                              }`}
+                            >
                               {product.sku}
                             </p>
                             <p className="text-xs text-slate-500">{catName}</p>
@@ -697,7 +820,11 @@ export function ProductsAdminPanel({
                           <td className="py-3 px-4 text-right tabular-nums text-slate-700">
                             {formatVnd(product.costPrice ?? 0)}
                           </td>
-                          <td className="py-3 px-4 text-right font-semibold tabular-nums text-slate-900">
+                          <td
+                            className={`py-3 px-4 text-right font-semibold tabular-nums ${
+                              isInactive ? 'text-slate-600' : 'text-slate-900'
+                            }`}
+                          >
                             {formatVnd(product.price)}
                           </td>
                           <td className="py-3 px-4 text-right tabular-nums">
@@ -705,63 +832,24 @@ export function ProductsAdminPanel({
                               className={`inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-md ${
                                 isLow
                                   ? 'bg-amber-50 text-amber-800'
-                                  : 'bg-slate-100 text-slate-800'
+                                  : isInactive
+                                    ? 'bg-slate-200/80 text-slate-600'
+                                    : 'bg-slate-100 text-slate-800'
                               }`}
                             >
-                              {product.stock} {product.baseUnit ?? product.unit}
+                              {product.stock} {baseUnitLabel}
                             </span>
                           </td>
-                          <td className="py-3 px-4">
+                          <td className="py-3 px-4 text-right tabular-nums">
                             <span
-                              className={`inline-flex px-2.5 py-0.5 text-xs font-semibold rounded-md border ${
-                                product.isActive !== false
-                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                  : 'bg-slate-100 text-slate-600 border-slate-200'
+                              className={`inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-md ${
+                                orderedQty > 0
+                                  ? 'bg-blue-50 text-blue-800'
+                                  : 'text-slate-500'
                               }`}
                             >
-                              {product.isActive !== false ? 'Hiển thị' : 'Đã ẩn'}
+                              {orderedQty} {baseUnitLabel}
                             </span>
-                          </td>
-                          <td className="py-3 px-4 text-right whitespace-nowrap">
-                            {confirmDeleteProductId === product.id ? (
-                              <div className="inline-flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => void handleDeleteProduct(product)}
-                                  className="px-2.5 py-1 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded cursor-pointer"
-                                >
-                                  Xác nhận xóa
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteProductId(null)}
-                                  className="px-2 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
-                                >
-                                  Hủy
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="inline-flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => openEditProduct(product)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg cursor-pointer"
-                                >
-                                  <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
-                                  <span>Sửa</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setConfirmDeleteProductId(product.id)
-                                  }
-                                  aria-label={`Xóa ${product.name}`}
-                                  className="inline-flex items-center p-1.5 text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg cursor-pointer"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                                </button>
-                              </div>
-                            )}
                           </td>
                         </tr>
                       );
@@ -1003,7 +1091,7 @@ export function ProductsAdminPanel({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
                     Giá bán (VNĐ)
@@ -1057,9 +1145,12 @@ export function ProductsAdminPanel({
                     className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
                   />
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Tồn tối thiểu
+                    Tồn tối thiểu (để trống = null)
                   </label>
                   <input
                     type="number"
@@ -1072,6 +1163,26 @@ export function ProductsAdminPanel({
                         minStock: e.target.value,
                       }))
                     }
+                    placeholder="Không bắt buộc"
+                    className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Tồn lớn nhất (để trống = null)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={productForm.maxStock}
+                    onChange={(e) =>
+                      setProductForm((prev) => ({
+                        ...prev,
+                        maxStock: e.target.value,
+                      }))
+                    }
+                    placeholder="Không bắt buộc"
                     className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -1132,6 +1243,126 @@ export function ProductsAdminPanel({
                 </div>
               </div>
 
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-800">
+                      Quy cách nhập mua theo lô
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Dùng cho phiếu nhập hàng &amp; tính gợi ý chọn hàng cần nhập.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProductForm((prev) => ({
+                        ...prev,
+                        packRows: [...prev.packRows, { label: '', factor: '' }],
+                      }))
+                    }
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-white hover:bg-blue-50 border border-blue-200 rounded-lg cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Thêm quy cách lô</span>
+                  </button>
+                </div>
+
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={productForm.allowSinglePiece}
+                    onChange={(e) =>
+                      setProductForm((prev) => ({
+                        ...prev,
+                        allowSinglePiece: e.target.checked,
+                      }))
+                    }
+                    className="w-4 h-4 rounded border-slate-300 text-blue-700"
+                  />
+                  <span>
+                    Cho phép nhập lẻ từng {productForm.baseUnit.trim() || 'cái'} (x1)
+                  </span>
+                </label>
+
+                {productForm.packRows.length > 0 && (
+                  <div className="space-y-2">
+                    {productForm.packRows.map((row, idx) => (
+                      <div
+                        key={`pack-row-${idx}`}
+                        className="flex items-center gap-2"
+                      >
+                        <input
+                          type="text"
+                          value={row.label}
+                          onChange={(e) =>
+                            setProductForm((prev) => ({
+                              ...prev,
+                              packRows: prev.packRows.map((r, i) =>
+                                i === idx ? { ...r, label: e.target.value } : r,
+                              ),
+                            }))
+                          }
+                          placeholder="Tên lô (VD: Hộp, Thùng)"
+                          className="flex-1 min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                        />
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={row.factor}
+                          onChange={(e) =>
+                            setProductForm((prev) => ({
+                              ...prev,
+                              packRows: prev.packRows.map((r, i) =>
+                                i === idx ? { ...r, factor: e.target.value } : r,
+                              ),
+                            }))
+                          }
+                          placeholder="Số lượng quy đổi (VD: 20)"
+                          className="w-36 min-h-[36px] px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setProductForm((prev) => ({
+                              ...prev,
+                              packRows: prev.packRows.filter((_, i) => i !== idx),
+                            }))
+                          }
+                          aria-label="Xóa quy cách nhập"
+                          className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label
+                  htmlFor="product-variants-input"
+                  className="block text-xs font-medium text-slate-700 mb-1"
+                >
+                  Phân loại / Biến thể (cách nhau bằng dấu phẩy, tùy chọn)
+                </label>
+                <input
+                  id="product-variants-input"
+                  type="text"
+                  value={productForm.variantsText}
+                  onChange={(e) =>
+                    setProductForm((prev) => ({
+                      ...prev,
+                      variantsText: e.target.value,
+                    }))
+                  }
+                  placeholder="VD: Mực xanh, Mực đỏ, Mực đen (để trống = Tiêu chuẩn)"
+                  className="w-full min-h-[40px] px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
               <ProductImageUploader
                 sku={productForm.sku}
                 imageUrlsText={productForm.imageUrlsText}
@@ -1182,22 +1413,60 @@ export function ProductsAdminPanel({
                 </div>
               )}
 
-              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-200">
-                <button
-                  type="button"
-                  onClick={() => setIsProductFormOpen(false)}
-                  className="min-h-[40px] px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingProduct}
-                  className="inline-flex items-center gap-1.5 min-h-[40px] px-4 py-2 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer disabled:opacity-60"
-                >
-                  <Check className="w-4 h-4" aria-hidden="true" />
-                  <span>{isSavingProduct ? 'Đang lưu...' : 'Lưu hàng hóa'}</span>
-                </button>
+              <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-slate-200">
+                <div>
+                  {productForm.id &&
+                    (confirmDeleteProductId === productForm.id ? (
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleDeleteProductById(
+                              productForm.id!,
+                              productForm.name || productForm.sku,
+                            )
+                          }
+                          className="min-h-[36px] px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg cursor-pointer"
+                        >
+                          Xác nhận xóa
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteProductId(null)}
+                          className="min-h-[36px] px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                        >
+                          Hủy xóa
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteProductId(productForm.id!)}
+                        className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 text-sm font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" aria-hidden="true" />
+                        <span>Xóa hàng hóa</span>
+                      </button>
+                    ))}
+                </div>
+
+                <div className="flex items-center gap-2.5 ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => setIsProductFormOpen(false)}
+                    className="min-h-[40px] px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingProduct}
+                    className="inline-flex items-center gap-1.5 min-h-[40px] px-4 py-2 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer disabled:opacity-60"
+                  >
+                    <Check className="w-4 h-4" aria-hidden="true" />
+                    <span>{isSavingProduct ? 'Đang lưu...' : 'Lưu hàng hóa'}</span>
+                  </button>
+                </div>
               </div>
             </form>
           </div>

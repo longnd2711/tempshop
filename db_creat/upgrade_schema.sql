@@ -201,6 +201,7 @@ ALTER TABLE public.products
     ADD COLUMN IF NOT EXISTS base_unit TEXT NOT NULL DEFAULT 'Cái',
     ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT 'Cái',
     ADD COLUMN IF NOT EXISTS conversion_rate NUMERIC(10, 2) NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS variants TEXT[] NOT NULL DEFAULT '{}'::TEXT[],
     ADD COLUMN IF NOT EXISTS image_urls TEXT[] NOT NULL DEFAULT '{}',
     ADD COLUMN IF NOT EXISTS notes TEXT,
     ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
@@ -226,7 +227,9 @@ CREATE POLICY "Manager and Admin full access on products"
     USING (public.current_app_role() IN ('manager', 'admin'))
     WITH CHECK (public.current_app_role() IN ('manager', 'admin'));
 
-CREATE OR REPLACE VIEW public.public_products AS
+DROP VIEW IF EXISTS public.public_products;
+
+CREATE VIEW public.public_products AS
 SELECT
     p.id,
     p.category_id,
@@ -237,10 +240,14 @@ SELECT
     p.name,
     p.brand,
     p.selling_price,
-    p.stock_quantity,
+    CASE
+        WHEN auth.uid() IS NOT NULL THEN p.stock_quantity
+        ELSE NULL
+    END AS stock_quantity,
     p.base_unit,
     p.unit,
     p.conversion_rate,
+    p.variants,
     p.image_urls,
     p.created_at
 FROM public.products p

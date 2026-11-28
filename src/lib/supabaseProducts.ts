@@ -1,6 +1,7 @@
 import { getSupabaseClient } from './supabaseClient';
 import { PRODUCTS } from '../data/catalog';
 import type { CategoryNode, Product } from '../types/shop';
+import { normalizePurchasePackOptions } from '../utils/adminLogic';
 
 export const CATALOG_CACHE_STORAGE_KEY = 'vpp_huong_long_catalog_cache_v3';
 export const BACKGROUND_SYNC_INTERVAL_MS = 10 * 60 * 1000;
@@ -131,9 +132,11 @@ export function mapSupabaseRowToProduct(
   const rawCostPrice = parseOptionalNumber(row.cost_price);
   const costPrice =
     rawCostPrice !== undefined ? normalizeVndPrice(rawCostPrice) : undefined;
-  const rawStockQuantity = Number(
-    row.stock_quantity ?? row.stock ?? row.quantity ?? 0,
-  );
+  const rawStockValue = row.stock_quantity ?? row.stock ?? row.quantity;
+  const rawStockQuantity =
+    rawStockValue === null || rawStockValue === undefined || rawStockValue === ''
+      ? 0
+      : Number(rawStockValue);
   const rawRank = Number(row.popular_rank ?? index + 1);
   const id = String(row.id ?? row.sku ?? `sp-${index + 1}`);
   const sku = String(row.sku ?? row.code ?? id).trim().toUpperCase();
@@ -173,8 +176,13 @@ export function mapSupabaseRowToProduct(
     baseUnit: parseOptionalString(row.base_unit),
     conversionRate: parseOptionalNumber(row.conversion_rate),
     stock: Number.isFinite(rawStockQuantity) ? rawStockQuantity : 0,
-    minStock: parseOptionalNumber(row.min_stock),
-    maxStock: parseOptionalNumber(row.max_stock),
+    orderedQuantity: parseOptionalNumber(row.ordered_quantity) ?? undefined,
+    purchasePackOptions: normalizePurchasePackOptions(
+      row.purchase_pack_options,
+      parseOptionalString(row.base_unit) ?? unit,
+    ),
+    minStock: parseOptionalNumber(row.min_stock) ?? null,
+    maxStock: parseOptionalNumber(row.max_stock) ?? null,
     popularRank: Number.isFinite(rawRank) ? rawRank : index + 1,
     variants: parseVariants(row.variants),
     image: parsedImages[0] ?? '',
@@ -270,7 +278,8 @@ export async function fetchCatalogFromSupabase(): Promise<CatalogFetchResult> {
       supabase
         .from(categoriesTable)
         .select('*')
-        .order('sort_order', { ascending: true }),
+        .order('sort_order', { ascending: true })
+        .order('name', { ascending: true }),
     ]);
 
     if (productsRes.error) {

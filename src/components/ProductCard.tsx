@@ -1,24 +1,54 @@
+import { useEffect, useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import type { Product } from '../types/shop';
-import { formatVnd } from '../utils/shopLogic';
+import {
+  clampCartQuantity,
+  formatStockAndOrderedDisplay,
+  formatVnd,
+  MAX_ORDER_QUANTITY,
+} from '../utils/shopLogic';
 import { SafeImage } from './SafeImage';
 
 interface ProductCardProps {
   product: Product;
   cartQuantity: number;
+  isAuthenticated?: boolean;
   onQuickAdd: (product: Product) => void;
   onUpdateQuantity: (productId: string, variant: string, delta: number) => void;
+  onSetQuantity?: (productId: string, variant: string, quantity: number) => void;
   onOpenDetail: (product: Product) => void;
 }
 
 export function ProductCard({
   product,
   cartQuantity,
+  isAuthenticated = false,
   onQuickAdd,
   onUpdateQuantity,
+  onSetQuantity,
   onOpenDetail,
 }: ProductCardProps) {
   const defaultVariant = product.variants[0] ?? 'Tiêu chuẩn';
+  const [qtyInput, setQtyInput] = useState(String(cartQuantity));
+
+  useEffect(() => {
+    setQtyInput(String(cartQuantity));
+  }, [cartQuantity]);
+
+  const commitTypedQuantity = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      setQtyInput(String(cartQuantity));
+      return;
+    }
+    const clamped = clampCartQuantity(trimmed, MAX_ORDER_QUANTITY);
+    if (onSetQuantity) {
+      onSetQuantity(product.id, defaultVariant, clamped);
+    } else {
+      onUpdateQuantity(product.id, defaultVariant, clamped - cartQuantity);
+    }
+    setQtyInput(String(clamped));
+  };
 
   return (
     <article className="group flex flex-col bg-white border border-slate-200 rounded-xl overflow-hidden transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm">
@@ -64,10 +94,17 @@ export function ProductCard({
         </button>
 
         <p className="mt-1.5 text-xs text-slate-500 truncate">
-          {product.brand ? `Hãng: ${product.brand}` : `Phân loại: ${defaultVariant}`}
-          {product.variants.length > 1 && !product.brand
-            ? ` (+${product.variants.length - 1} lựa chọn)`
-            : ''}
+          {product.brand
+            ? `Hãng: ${product.brand}${
+                product.variants.length > 1
+                  ? ` · ${product.variants.length} phân loại`
+                  : ''
+              }`
+            : `Phân loại: ${defaultVariant}${
+                product.variants.length > 1
+                  ? ` (+${product.variants.length - 1} lựa chọn)`
+                  : ''
+              }`}
         </p>
 
         <div className="mt-auto pt-3.5 sm:pt-4 flex items-center justify-between gap-3 border-t border-slate-100">
@@ -75,11 +112,15 @@ export function ProductCard({
             <p className="text-base font-semibold text-slate-900 tabular-nums">
               {formatVnd(product.price)}
             </p>
-            <p className="text-xs text-slate-500">
-              {product.unit}
-              <span aria-hidden="true"> · </span>
-              {product.stock > 0 ? `Còn ${product.stock}` : 'Nhận đặt hàng'}
-            </p>
+            {isAuthenticated && (
+              <p className="text-xs text-slate-500 tabular-nums">
+                {formatStockAndOrderedDisplay(
+                  product.stock,
+                  product.unit,
+                  product.orderedQuantity,
+                )}
+              </p>
+            )}
           </div>
 
           {cartQuantity > 0 ? (
@@ -91,18 +132,53 @@ export function ProductCard({
                 type="button"
                 onClick={() => onUpdateQuantity(product.id, defaultVariant, -1)}
                 aria-label={`Giảm số lượng ${product.name}`}
-                className="w-10 h-11 sm:w-9 sm:h-9 inline-flex items-center justify-center text-blue-800 hover:bg-blue-100 rounded-l-lg transition-colors focus-visible:outline-2 focus-visible:outline-blue-700 cursor-pointer"
+                className="w-9 h-11 sm:w-8 sm:h-9 inline-flex items-center justify-center text-blue-800 hover:bg-blue-100 rounded-l-lg transition-colors focus-visible:outline-2 focus-visible:outline-blue-700 cursor-pointer"
               >
                 <Minus className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
-              <span className="w-8 text-center text-sm font-semibold text-blue-900 tabular-nums">
-                {cartQuantity}
-              </span>
+              <input
+                type="number"
+                min={0}
+                max={MAX_ORDER_QUANTITY}
+                inputMode="numeric"
+                value={qtyInput}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setQtyInput(val);
+                  const parsed = Number(val);
+                  if (
+                    val.trim() !== '' &&
+                    Number.isFinite(parsed) &&
+                    parsed > 0 &&
+                    parsed <= MAX_ORDER_QUANTITY
+                  ) {
+                    const rounded = Math.round(parsed);
+                    if (onSetQuantity) {
+                      onSetQuantity(product.id, defaultVariant, rounded);
+                    } else {
+                      onUpdateQuantity(
+                        product.id,
+                        defaultVariant,
+                        rounded - cartQuantity,
+                      );
+                    }
+                  }
+                }}
+                onBlur={() => commitTypedQuantity(qtyInput)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.currentTarget.blur();
+                  }
+                }}
+                aria-label={`Nhập số lượng ${product.name}`}
+                className="w-11 h-11 sm:h-9 bg-transparent text-center text-sm font-semibold text-blue-900 tabular-nums focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
               <button
                 type="button"
+                disabled={cartQuantity >= MAX_ORDER_QUANTITY}
                 onClick={() => onUpdateQuantity(product.id, defaultVariant, 1)}
                 aria-label={`Tăng số lượng ${product.name}`}
-                className="w-10 h-11 sm:w-9 sm:h-9 inline-flex items-center justify-center text-blue-800 hover:bg-blue-100 rounded-r-lg transition-colors focus-visible:outline-2 focus-visible:outline-blue-700 cursor-pointer"
+                className="w-9 h-11 sm:w-8 sm:h-9 inline-flex items-center justify-center text-blue-800 hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-r-lg transition-colors focus-visible:outline-2 focus-visible:outline-blue-700 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" aria-hidden="true" />
               </button>

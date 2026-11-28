@@ -1,49 +1,223 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, CalendarRange, Clock } from 'lucide-react';
-import type { OrderRecord, RevenuePeriodMode } from '../types/shop';
+import {
+  BarChart3,
+  CalendarRange,
+  Filter,
+  Search,
+  X,
+} from 'lucide-react';
+import type {
+  CategoryNode,
+  OrderRecord,
+  Product,
+  RevenuePeriodMode,
+  UserRole,
+} from '../types/shop';
 import {
   buildRevenueChartData,
-  getYesterdayEveningPreset,
+  canViewAllRevenuePeriods,
+  canViewRevenueChart,
+  getTodayFullDayPreset,
+  getVisibleRevenueModesForRole,
+  REVENUE_PERIOD_LABELS,
 } from '../utils/adminLogic';
-import { formatVnd } from '../utils/shopLogic';
+import { formatVnd, normalizeVietnameseText } from '../utils/shopLogic';
 
 interface RevenueChartCardProps {
   orders: OrderRecord[];
+  userRole?: UserRole;
+  products?: Product[];
+  categories?: CategoryNode[];
 }
 
-const PERIOD_OPTIONS: Array<{ id: RevenuePeriodMode; label: string }> = [
-  { id: 'day', label: 'Theo ngày' },
-  { id: 'week', label: 'Theo tuần' },
-  { id: 'month', label: 'Theo tháng' },
-  { id: 'quarter', label: 'Theo quý' },
-  { id: 'year', label: 'Theo năm' },
-  { id: 'custom', label: 'Tùy chỉnh' },
-];
+export function RevenueChartCard({
+  orders,
+  userRole,
+  products = [],
+  categories = [],
+}: RevenueChartCardProps) {
+  const isVisibleForRole = canViewRevenueChart(userRole);
+  const defaultCustomPreset = useMemo(() => getTodayFullDayPreset(), []);
+  const showAllPeriods = canViewAllRevenuePeriods(userRole);
+  const visibleModes = useMemo(
+    () => getVisibleRevenueModesForRole(userRole),
+    [userRole],
+  );
 
-export function RevenueChartCard({ orders }: RevenueChartCardProps) {
-  const defaultCustomPreset = useMemo(() => getYesterdayEveningPreset(), []);
   const [mode, setMode] = useState<RevenuePeriodMode>('day');
   const [paidOnly, setPaidOnly] = useState(false);
   const [customStart, setCustomStart] = useState(defaultCustomPreset.start);
   const [customEnd, setCustomEnd] = useState(defaultCustomPreset.end);
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [productSearchQuery, setProductSearchQuery] = useState('');
+  const [showProductPicker, setShowProductPicker] = useState(false);
   const [selectedBucketKey, setSelectedBucketKey] = useState<string | null>(
     null,
   );
 
+  const effectiveMode: RevenuePeriodMode = showAllPeriods ? mode : 'day';
+
+  useEffect(() => {
+    if (!showAllPeriods && mode !== 'day') {
+      setMode('day');
+    }
+  }, [showAllPeriods, mode]);
+
+  // Build ordered category choices from category tree + fallback from products
+  const categoryOptions = useMemo(() => {
+    if (categories.length > 0) {
+      const roots = categories
+        .filter((c) => !c.parentId)
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'vi'));
+      const childrenMap = new Map<string, CategoryNode[]>();
+      for (const c of categories) {
+        if (c.parentId) {
+          const list = childrenMap.get(c.parentId) ?? [];
+          list.push(c);
+          childrenMap.set(c.parentId, list);
+        }
+      }
+      const ordered: Array<{ id: string; label: string; name: string }> = [];
+      const visited = new Set<string>();
+      const append = (node: CategoryNode, depth: number) => {
+        if (visited.has(node.id)) return;
+        visited.add(node.id);
+        ordered.push({
+          id: node.id,
+          name: node.name,
+          label: depth > 0 ? `${'— '.repeat(depth)}${node.name}` : node.name,
+        });
+        const children = (childrenMap.get(node.id) ?? []).sort(
+          (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'vi'),
+        );
+        for (const child of children) {
+          append(child, depth + 1);
+        }
+      };
+      for (const r of roots) append(r, 0);
+      for (const c of categories) {
+        if (!visited.has(c.id)) append(c, 0);
+      }
+      return ordered;
+    }
+
+    const uniqueNames = new Set<string>();
+    const fallback: Array<{ id: string; label: string; name: string }> = [];
+    for (const p of products) {
+      const name = p.categoryLabel || p.category;
+      if (name && !uniqueNames.has(name)) {
+        uniqueNames.add(name);
+        fallback.push({ id: name, label: name, name });
+      }
+    }
+    return fallback.sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+  }, [categories, products]);
+
+  // Expand selected category IDs to include descendant categories for product picker filtering
+  const expandedSelectedCatIds = useMemo(() => {
+    const ids = new Set<string>();
+    const names = new Set<string>();
+    if (selectedCategoryIds.length === 0) {
+      return { ids, names };
+    }
+    const childrenMap = new Map<string, CategoryNode[]>();
+    const byId = new Map<string, CategoryNode>();
+    for (const c of categories) {
+      byId.set(c.id, c);
+      if (c.parentId) {
+        const list = childrenMap.get(c.parentId) ?? [];
+        list.push(c);
+        childrenMap.set(c.parentId, list);
+      }
+    }
+    const visit = (id: string) => {
+      if (ids.has(id)) return;
+      ids.add(id);
+      const node = byId.get(id);
+      if (node) {
+        if (node.name) names.add(normalizeVietnameseText(node.name));
+        if (node.slug) names.add(normalizeVietnameseText(node.slug));
+      } else {
+        names.add(normalizeVietnameseText(id));
+      }
+      for (const child of childrenMap.get(id) ?? []) {
+        visit(child.id);
+      }
+    };
+    for (const cid of selectedCategoryIds) visit(cid);
+    return { ids, names };
+  }, [selectedCategoryIds, categories]);
+
+  const selectableProducts = useMemo(() => {
+    const normQuery = normalizeVietnameseText(productSearchQuery);
+    return products
+      .filter((p) => {
+        if (selectedCategoryIds.length > 0) {
+          const catMatch =
+            (p.categoryId && expandedSelectedCatIds.ids.has(p.categoryId)) ||
+            (p.categorySlug &&
+              expandedSelectedCatIds.names.has(normalizeVietnameseText(p.categorySlug))) ||
+            (p.category &&
+              expandedSelectedCatIds.names.has(normalizeVietnameseText(p.category))) ||
+            (p.categoryLabel &&
+              expandedSelectedCatIds.names.has(normalizeVietnameseText(p.categoryLabel)));
+          if (!catMatch) return false;
+        }
+        if (!normQuery) return true;
+        const hay = normalizeVietnameseText(`${p.sku} ${p.barcode ?? ''} ${p.name}`);
+        return hay.includes(normQuery);
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+  }, [products, productSearchQuery, selectedCategoryIds.length, expandedSelectedCatIds]);
+
+  const productById = useMemo(
+    () => new Map(products.map((p) => [p.id, p])),
+    [products],
+  );
+  const categoryNameById = useMemo(
+    () => new Map(categoryOptions.map((c) => [c.id, c.name])),
+    [categoryOptions],
+  );
+
+  const hasAnalyticsFilter =
+    selectedCategoryIds.length > 0 || selectedProductIds.length > 0;
+
   const chartData = useMemo(
     () =>
       buildRevenueChartData(orders, {
-        mode,
+        mode: effectiveMode,
         customStart,
         customEnd,
         paidOnly,
+        categoryIds: selectedCategoryIds,
+        productIds: selectedProductIds,
+        products,
+        categories,
       }),
-    [orders, mode, customStart, customEnd, paidOnly],
+    [
+      orders,
+      effectiveMode,
+      customStart,
+      customEnd,
+      paidOnly,
+      selectedCategoryIds,
+      selectedProductIds,
+      products,
+      categories,
+    ],
   );
 
   useEffect(() => {
     setSelectedBucketKey(null);
-  }, [mode, customStart, customEnd, paidOnly]);
+  }, [
+    effectiveMode,
+    customStart,
+    customEnd,
+    paidOnly,
+    selectedCategoryIds,
+    selectedProductIds,
+  ]);
 
   const activeBucket = useMemo(() => {
     if (chartData.buckets.length === 0) return null;
@@ -68,16 +242,39 @@ export function RevenueChartCard({ orders }: RevenueChartCardProps) {
     return 3;
   }, [chartData.buckets.length]);
 
-  const handleApplyYesterdayEvening = () => {
-    const preset = getYesterdayEveningPreset();
-    setCustomStart(preset.start);
-    setCustomEnd(preset.end);
-    setMode('custom');
+  if (!isVisibleForRole) {
+    return null;
+  }
+
+  const handleAddCategoryFilter = (catId: string) => {
+    if (!catId) return;
+    setSelectedCategoryIds((prev) =>
+      prev.includes(catId) ? prev : [...prev, catId],
+    );
+  };
+
+  const handleRemoveCategoryFilter = (catId: string) => {
+    setSelectedCategoryIds((prev) => prev.filter((id) => id !== catId));
+  };
+
+  const handleToggleProductFilter = (productId: string) => {
+    setSelectedProductIds((prev) =>
+      prev.includes(productId)
+        ? prev.filter((id) => id !== productId)
+        : [...prev, productId],
+    );
+  };
+
+  const handleClearAnalyticsFilters = () => {
+    setSelectedCategoryIds([]);
+    setSelectedProductIds([]);
+    setProductSearchQuery('');
   };
 
   return (
     <section
       aria-labelledby="revenue-chart-heading"
+      data-testid="revenue-chart-card"
       className="p-4 sm:p-5 bg-white border border-slate-200 rounded-xl shadow-xs space-y-4"
     >
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -94,6 +291,7 @@ export function RevenueChartCard({ orders }: RevenueChartCardProps) {
             </h3>
             <p className="text-xs text-slate-500">
               {chartData.rangeLabel} · Loại trừ đơn đã hủy
+              {hasAnalyticsFilter ? ' · Đang lọc theo nhóm hàng / sản phẩm' : ''}
             </p>
           </div>
         </div>
@@ -114,27 +312,27 @@ export function RevenueChartCard({ orders }: RevenueChartCardProps) {
         aria-label="Chọn kỳ thống kê doanh thu"
         className="flex flex-wrap items-center gap-2"
       >
-        {PERIOD_OPTIONS.map((opt) => {
-          const isActive = mode === opt.id;
+        {visibleModes.map((modeId) => {
+          const isActive = effectiveMode === modeId;
           return (
             <button
-              key={opt.id}
+              key={modeId}
               type="button"
               aria-pressed={isActive}
-              onClick={() => setMode(opt.id)}
+              onClick={() => setMode(modeId)}
               className={`min-h-[36px] px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
                 isActive
                   ? 'bg-blue-700 text-white border-blue-700 shadow-xs'
                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
               }`}
             >
-              {opt.label}
+              {REVENUE_PERIOD_LABELS[modeId]}
             </button>
           );
         })}
       </div>
 
-      {mode === 'custom' && (
+      {effectiveMode === 'custom' && (
         <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex flex-col md:flex-row md:items-end gap-3">
           <div className="flex-1 min-w-0">
             <label
@@ -167,21 +365,183 @@ export function RevenueChartCard({ orders }: RevenueChartCardProps) {
               className="w-full min-h-[38px] px-3 py-1.5 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-2 focus:outline-blue-700"
             />
           </div>
-
-          <button
-            type="button"
-            onClick={handleApplyYesterdayEvening}
-            className="inline-flex items-center justify-center gap-1.5 min-h-[38px] px-3.5 py-1.5 text-xs font-semibold text-blue-700 bg-white hover:bg-blue-50 border border-blue-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
-          >
-            <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span>17h – 22h hôm qua</span>
-          </button>
         </div>
       )}
 
+      {/* Bộ lọc phân tích theo Nhóm hàng & Hàng hóa */}
+      <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+            <Filter className="w-3.5 h-3.5 text-blue-700" aria-hidden="true" />
+            <span>Nghiên cứu doanh thu theo nhóm hàng / hàng hóa</span>
+          </div>
+
+          {hasAnalyticsFilter && (
+            <button
+              type="button"
+              onClick={handleClearAnalyticsFilters}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md cursor-pointer"
+            >
+              <X className="w-3 h-3" aria-hidden="true" />
+              <span>Xóa lọc nhóm / SP</span>
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label
+              htmlFor="revenue-category-select"
+              className="block text-xs font-medium text-slate-600 mb-1"
+            >
+              Chọn nhóm hàng (có thể thêm nhiều nhóm)
+            </label>
+            <select
+              id="revenue-category-select"
+              value=""
+              onChange={(e) => handleAddCategoryFilter(e.target.value)}
+              className="w-full min-h-[38px] px-3 py-1.5 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg text-slate-800 cursor-pointer"
+            >
+              <option value="">
+                {selectedCategoryIds.length === 0
+                  ? '-- Tất cả nhóm hàng --'
+                  : `+ Thêm nhóm hàng (${selectedCategoryIds.length} đang chọn)`}
+              </option>
+              {categoryOptions.map((cat) => (
+                <option
+                  key={cat.id}
+                  value={cat.id}
+                  disabled={selectedCategoryIds.includes(cat.id)}
+                >
+                  {cat.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="relative">
+            <label
+              htmlFor="revenue-product-search"
+              className="block text-xs font-medium text-slate-600 mb-1"
+            >
+              Chọn hàng hóa cụ thể ({selectedProductIds.length} đang chọn)
+            </label>
+            <div className="relative">
+              <Search
+                className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                aria-hidden="true"
+              />
+              <input
+                id="revenue-product-search"
+                type="search"
+                value={productSearchQuery}
+                onFocus={() => setShowProductPicker(true)}
+                onChange={(e) => {
+                  setProductSearchQuery(e.target.value);
+                  setShowProductPicker(true);
+                }}
+                placeholder="Tìm tên hàng hoặc SKU để tick chọn..."
+                className="w-full min-h-[38px] pl-8 pr-20 py-1.5 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-700"
+              />
+              <button
+                type="button"
+                onClick={() => setShowProductPicker((prev) => !prev)}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded cursor-pointer"
+              >
+                {showProductPicker ? 'Thu gọn' : 'Chọn SP'}
+              </button>
+            </div>
+
+            {showProductPicker && (
+              <div className="mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-lg shadow-md divide-y divide-slate-100">
+                {selectableProducts.length === 0 ? (
+                  <p className="p-3 text-xs text-slate-500 text-center">
+                    Không có hàng hóa khớp từ khóa / nhóm hàng đang chọn.
+                  </p>
+                ) : (
+                  selectableProducts.slice(0, 80).map((prod) => {
+                    const checked = selectedProductIds.includes(prod.id);
+                    return (
+                      <label
+                        key={prod.id}
+                        className={`flex items-center justify-between gap-2 px-3 py-2 text-xs cursor-pointer hover:bg-blue-50/60 ${
+                          checked ? 'bg-blue-50/70' : ''
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => handleToggleProductFilter(prod.id)}
+                            className="w-3.5 h-3.5 rounded border-slate-300 text-blue-700"
+                          />
+                          <span className="font-mono text-[11px] text-slate-500 shrink-0">
+                            {prod.sku}
+                          </span>
+                          <span className="font-medium text-slate-800 truncate">
+                            {prod.name}
+                          </span>
+                        </span>
+                        <span className="text-[11px] text-slate-500 shrink-0 tabular-nums">
+                          {formatVnd(prod.price)}
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {hasAnalyticsFilter && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            {selectedCategoryIds.map((catId) => (
+              <span
+                key={`cat-${catId}`}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-800 bg-blue-50 border border-blue-200 rounded-md"
+              >
+                <span>Nhóm: {categoryNameById.get(catId) ?? catId}</span>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveCategoryFilter(catId)}
+                  aria-label={`Bỏ lọc nhóm ${categoryNameById.get(catId) ?? catId}`}
+                  className="text-blue-600 hover:text-blue-900 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            ))}
+
+            {selectedProductIds.map((prodId) => {
+              const prod = productById.get(prodId);
+              const label = prod ? `${prod.sku} · ${prod.name}` : prodId;
+              return (
+                <span
+                  key={`prod-${prodId}`}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md"
+                >
+                  <span className="max-w-[220px] truncate">{label}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleProductFilter(prodId)}
+                    aria-label={`Bỏ lọc sản phẩm ${label}`}
+                    className="text-emerald-700 hover:text-emerald-950 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
-          <p className="text-xs text-slate-500">Doanh thu trong kỳ</p>
+          <p className="text-xs text-slate-500">
+            {hasAnalyticsFilter ? 'Doanh thu mặt hàng đã lọc' : 'Doanh thu trong kỳ'}
+          </p>
           <p
             data-testid="revenue-period-total"
             className="mt-0.5 font-display text-lg sm:text-xl font-bold text-blue-700 tabular-nums"
@@ -190,12 +550,17 @@ export function RevenueChartCard({ orders }: RevenueChartCardProps) {
           </p>
         </div>
         <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
-          <p className="text-xs text-slate-500">Số đơn trong kỳ</p>
+          <p className="text-xs text-slate-500">
+            {hasAnalyticsFilter ? 'Số đơn chứa SP đã lọc' : 'Số đơn trong kỳ'}
+          </p>
           <p
             data-testid="revenue-period-count"
             className="mt-0.5 font-display text-lg sm:text-xl font-bold text-slate-900 tabular-nums"
           >
             {chartData.totalOrders} đơn
+            {hasAnalyticsFilter && (chartData.matchedQuantity ?? 0) > 0
+              ? ` (${chartData.matchedQuantity} SP)`
+              : ''}
           </p>
         </div>
         <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
@@ -300,7 +665,7 @@ export function RevenueChartCard({ orders }: RevenueChartCardProps) {
 
             {chartData.totalOrders === 0 && (
               <p className="mt-3 text-center text-xs text-slate-500">
-                Chưa có đơn hàng nào trong kỳ đang chọn.
+                Chưa có đơn hàng nào khớp bộ lọc trong kỳ đang chọn.
               </p>
             )}
           </div>
